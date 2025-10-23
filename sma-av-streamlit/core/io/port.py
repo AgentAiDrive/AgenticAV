@@ -139,6 +139,19 @@ def import_zip(
         "skipped": {"agents": 0, "recipes": 0, "workflows": 0},
         "messages": [],
     }
+
+    # Helper: does Recipe support inline YAML?
+    def _supports_inline_yaml() -> bool:
+        try:
+            if hasattr(Recipe, "yaml"):
+                return True
+            tbl = getattr(Recipe, "__table__", None)
+            if tbl is not None and hasattr(tbl, "columns"):
+                return "yaml" in tbl.columns.keys()
+        except Exception:
+            pass
+        return False
+
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as z, get_session() as db:
         # ---------- Agents ----------
         if "agents.json" in z.namelist():
@@ -153,41 +166,52 @@ def import_zip(
                 key = name.lower()
                 if key in existing:
                     if merge == "skip":
-                        result["skipped"]["agents"] += 1; continue
+                        result["skipped"]["agents"] += 1
+                        continue
                     if merge == "rename":
-                        i = 2; cand = f"{name} ({i})"
+                        i = 2
+                        cand = f"{name} ({i})"
                         while cand.lower() in existing:
-                            i += 1; cand = f"{name} ({i})"
-                        name = cand; key = name.lower()
+                            i += 1
+                            cand = f"{name} ({i})"
+                        name = cand
+                        key = name.lower()
                     elif merge == "overwrite":
                         if not dry_run:
                             a = existing[key]
                             a.domain = row.get("domain") or a.domain
                             a.config_json = row.get("config_json") or a.config_json
-                        result["updated"]["agents"] += 1; continue
+                        result["updated"]["agents"] += 1
+                        continue
                 if not dry_run:
                     db.add(Agent(name=name, domain=row.get("domain") or "", config_json=row.get("config_json") or {}))
                 result["created"]["agents"] += 1
-            if not dry_run: db.commit()
+            if not dry_run:
+                db.commit()
 
         # ---------- Recipes ----------
         recipes_dir.mkdir(parents=True, exist_ok=True)
         recipe_entries: list[dict] = []
+
         if "recipes.json" in z.namelist():
             try:
                 recipe_entries = json.loads(z.read("recipes.json").decode("utf-8"))
+                if not isinstance(recipe_entries, list):
+                    raise ValueError("recipes.json must be a list")
             except Exception as e:
                 result["messages"].append(f"recipes.json parse error: {e}")
         else:
-            # Fallback: sweep recipes/*.yaml directly from the zip
-            yaml_paths = [n for n in z.namelist() if n.startswith("recipes/") and n.lower().endswith((".yml",".yaml"))]
+            # Fallback: sweep recipes/*.yaml from the zip
+            yaml_paths = [n for n in z.namelist() if n.startswith("recipes/") and n.lower().endswith((".yml", ".yaml"))]
             for yp in yaml_paths:
                 stem = Path(yp).name.rsplit(".", 1)[0]
-                name = stem.replace("_"," ").replace("-"," ").strip() or stem
+                name = stem.replace("_", " ").replace("-", " ").strip() or stem
                 recipe_entries.append({"name": name, "file": yp})
 
         if recipe_entries:
             existing = {r.name.lower(): r for r in db.query(Recipe).all()}
+            inline_ok = _supports_inline_yaml()
+
             for entry in recipe_entries:
                 name = (entry.get("name") or "").strip()
                 file_in_zip = entry.get("file")
@@ -195,36 +219,62 @@ def import_zip(
                     result["messages"].append(f"Recipe entry invalid: {entry!r}")
                     result["skipped"]["recipes"] += 1
                     continue
+
+                # ALWAYS read YAML text first; handle missing file cleanly
                 try:
                     ytxt = z.read(file_in_zip).decode("utf-8")
                 except KeyError:
                     result["messages"].append(f"Recipe file missing in bundle: {file_in_zip}")
                     result["skipped"]["recipes"] += 1
                     continue
+
                 key = name.lower()
+
+                # Overwrite / Rename / Skip, if exists
                 if key in existing:
                     if merge == "skip":
-                        result["skipped"]["recipes"] += 1; continue
+                        result["skipped"]["recipes"] += 1
+                        continue
                     if merge == "rename":
-                        i = 2; cand = f"{name} ({i})"
+                        i = 2
+                        cand = f"{name} ({i})"
                         while cand.lower() in existing:
-                            i += 1; cand = f"{name} ({i})"
-                        name = cand; key = name.lower()
+                            i += 1
+                            cand = f"{name} ({i})"
+                        name = cand
+                        key = name.lower()
                     elif merge == "overwrite":
                         if not dry_run:
                             r = existing[key]
-                            fn = f"{name.lower().replace(' ','-')}.yaml"
-                            (Path(recipes_dir) / fn).write_text(ytxt, encoding="utf-8")
-                            # keep both path and inline YAML for robust execution
+                            fn = f"{name.lower().replace(' ', '-')}.yaml"
+                            (recipes_dir / fn).write_text(ytxt, encoding="utf-8")
+                            # keep path, set inline only if the model supports it
                             r.yaml_path = fn
-                            setattr(r, "yaml", ytxt)
-                        result["updated"]["recipes"] += 1; continue
+                            if inline_ok:
+                                try:
+                                    setattr(r, "yaml", ytxt)
+                                except Exception:
+                                    pass
+                        result["updated"]["recipes"] += 1
+                        continue
+
+                # CREATE
                 if not dry_run:
-                    fn = f"{name.lower().replace(' ','-')}.yaml"
-                    (Path(recipes_dir) / fn).write_text(ytxt, encoding="utf-8")
-                    db.add(Recipe(name=name, yaml_path=fn, yaml=ytxt))
+                    fn = f"{name.lower().replace(' ', '-')}.yaml"
+                    (recipes_dir / fn).write_text(ytxt, encoding="utf-8")
+                    # construct Recipe safely regardless of 'yaml' column presence
+                    rec = Recipe(name=name, yaml_path=fn)
+                    if inline_ok:
+                        try:
+                            setattr(rec, "yaml", ytxt)
+                        except Exception:
+                            # if model changed during runtime, silently ignore
+                            pass
+                    db.add(rec)
                 result["created"]["recipes"] += 1
-            if not dry_run: db.commit()
+
+            if not dry_run:
+                db.commit()
 
         # ---------- Workflows ----------
         if "workflows.json" in z.namelist():
@@ -235,35 +285,62 @@ def import_zip(
             for row in wfs:
                 name = (row.get("name") or "").strip()
                 if not name:
-                    result["messages"].append("Workflow with empty name skipped."); result["skipped"]["workflows"] += 1; continue
+                    result["messages"].append("Workflow with empty name skipped.")
+                    result["skipped"]["workflows"] += 1
+                    continue
                 agent = agents_by_name.get((row.get("agent_name") or "").lower())
                 recipe = recipes_by_name.get((row.get("recipe_name") or "").lower())
                 if not agent or not recipe:
-                    result["messages"].append(f"Workflow '{name}' skipped — missing agent/recipe: {row.get('agent_name')} / {row.get('recipe_name')}")
-                    result["skipped"]["workflows"] += 1; continue
+                    result["messages"].append(
+                        f"Workflow '{name}' skipped — missing agent/recipe: {row.get('agent_name')} / {row.get('recipe_name')}"
+                    )
+                    result["skipped"]["workflows"] += 1
+                    continue
+
                 key = name.lower()
                 if key in existing_names:
                     if merge == "skip":
-                        result["skipped"]["workflows"] += 1; continue
+                        result["skipped"]["workflows"] += 1
+                        continue
                     if merge == "rename":
-                        i = 2; cand = f"{name} ({i})"
+                        i = 2
+                        cand = f"{name} ({i})"
                         while cand.lower() in existing_names:
-                            i += 1; cand = f"{name} ({i})"
-                        name = cand; key = name.lower()
+                            i += 1
+                            cand = f"{name} ({i})"
+                        name = cand
+                        key = name.lower()
                     elif merge == "overwrite":
                         if not dry_run:
                             wf = existing_names[key]
-                            update_workflow(db, wf.id, name=name, agent_id=agent.id, recipe_id=recipe.id,
-                                            trigger_type=row.get("trigger","manual"), trigger_value=row.get("interval_minutes"),
-                                            enabled=1 if row.get("enabled", True) else 0)
-                        result["updated"]["workflows"] += 1; continue
-                # create
+                            update_workflow(
+                                db,
+                                wf.id,
+                                name=name,
+                                agent_id=agent.id,
+                                recipe_id=recipe.id,
+                                trigger_type=row.get("trigger", "manual"),
+                                trigger_value=row.get("interval_minutes"),
+                                enabled=1 if row.get("enabled", True) else 0,
+                            )
+                        result["updated"]["workflows"] += 1
+                        continue
+
+                # CREATE
                 if not dry_run:
-                    new_wf = create_workflow(db, name=name, agent_id=agent.id, recipe_id=recipe.id,
-                                             trigger_type=row.get("trigger","manual"), trigger_value=row.get("interval_minutes"))
+                    new_wf = create_workflow(
+                        db,
+                        name=name,
+                        agent_id=agent.id,
+                        recipe_id=recipe.id,
+                        trigger_type=row.get("trigger", "manual"),
+                        trigger_value=row.get("interval_minutes"),
+                    )
                     if not row.get("enabled", True):
                         update_workflow(db, new_wf.id, enabled=0)
                 result["created"]["workflows"] += 1
-            if not dry_run: db.commit()
-    return result
 
+            if not dry_run:
+                db.commit()
+
+    return result
