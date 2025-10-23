@@ -4,7 +4,14 @@ from typing import Iterator, Dict, Any
 from sqlalchemy.orm import Session
 from ..db.models import Agent, Recipe, Run
 from ..recipes.service import load_recipe_dict
-from ..utils.evidence import attach_json
+# core/workflow/engine.py (top of file)
+try:
+    from ..utils.evidence import attach_json
+except Exception:
+    # Fallback: graceful no-op if evidence module can't import
+    def attach_json(db, run_id, obj, **kwargs):
+        return None
+
 
 def run_workflow_phases(recipe: Dict[str, Any]) -> Iterator[tuple[str, str]]:
     for phase in ["intake", "plan", "act", "verify"]:
