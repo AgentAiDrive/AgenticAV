@@ -10,43 +10,42 @@ from .engine import execute_recipe_run
 from core.runstore_factory import make_runstore  # shared store
 
 
-# ---------- Dynamic resolver for the Workflow model ---------------------------
+# ---------- Resolve the Workflow model dynamically (no hard-coded class name) ----------
 def _resolve_workflow_model() -> Tuple[type, Set[str]]:
     """
-    Find a workflow-like SQLAlchemy model in core.db.models by inspecting columns.
-    We pick the class that has at least:
-      - id, name, agent_id, recipe_id
-    and prefer the one that also has scheduling/status fields:
-      - trigger_type, trigger_value, next_run_at, last_run_at, enabled, status
-    Returns: (ModelClass, available_column_names)
+    Locate a workflow-like SQLAlchemy model in core.db.models by inspecting columns.
+    Required columns: id, name, agent_id, recipe_id
+    Prefer models that also have: trigger_type, trigger_value, next_run_at, last_run_at, enabled, status
     """
-    from ..db import models as M  # lazy import to avoid early failures
+    from ..db import models as M  # lazy import
 
+    # Try common names first (fast path)
+    for cand in ("WorkflowDef", "Workflow", "WorkflowDefinition"):
+        cls = getattr(M, cand, None)
+        if cls is not None and getattr(cls, "__table__", None) is not None:
+            cols = set(cls.__table__.columns.keys())
+            if {"id", "name", "agent_id", "recipe_id"}.issubset(cols):
+                return cls, cols
+
+    # Fallback: inspect all SQLAlchemy models in the module
     best = None
-    best_score = -1
     best_cols: Set[str] = set()
-
-    for attr, cls in vars(M).items():
+    best_score = -1
+    for _, cls in vars(M).items():
         if not isinstance(cls, type):
             continue
         table = getattr(cls, "__table__", None)
         if table is None or not hasattr(table, "columns"):
             continue
         cols = set(table.columns.keys())
-        # required baseline fields
-        required = {"id", "name", "agent_id", "recipe_id"}
-        if not required.issubset(cols):
+        if not {"id", "name", "agent_id", "recipe_id"}.issubset(cols):
             continue
-        # score by extra helpful columns being present
         extras = {"trigger_type", "trigger_value", "next_run_at", "last_run_at", "enabled", "status"}
-        score = len(extras.intersection(cols))
+        score = len(extras & cols)
         if score > best_score:
-            best = cls
-            best_score = score
-            best_cols = cols
+            best, best_cols, best_score = cls, cols, score
 
     if best is None:
-        # Give a helpful message about what we looked for
         raise ImportError(
             "Could not resolve a workflow model from core.db.models. "
             "Expected a SQLAlchemy class with columns: id, name, agent_id, recipe_id "
@@ -55,11 +54,10 @@ def _resolve_workflow_model() -> Tuple[type, Set[str]]:
     return best, best_cols
 
 
-# Bind the resolved model
 WorkflowDef, _WF_COLS = _resolve_workflow_model()
+# --------------------------------------------------------------------------------------
 
 
-# ---------- Public API --------------------------------------------------------
 def list_workflows(db: Session):
     """Return all workflows ordered by id (ascending)."""
     return db.query(WorkflowDef).order_by(WorkflowDef.id.asc()).all()
@@ -108,8 +106,7 @@ def create_workflow(
     if "enabled" in _WF_COLS:
         setattr(wf, "enabled", 1)
 
-    if (trigger_type == "interval" and trigger_value and
-            "next_run_at" in _WF_COLS):
+    if (trigger_type == "interval" and trigger_value and "next_run_at" in _WF_COLS):
         setattr(wf, "next_run_at", datetime.utcnow() + timedelta(minutes=int(trigger_value)))
 
     db.add(wf)
@@ -227,7 +224,7 @@ def run_now(db: Session, wf_id: int):
         setattr(wf, "last_run_at", datetime.utcnow())
     if "status" in _WF_COLS:
         setattr(wf, "status", compute_status(wf))
-    if "trigger_type" in _WF_COLS and "trigger_value" in _WF_COLS and "next_run_at" in _WF_COLS:
+    if {"trigger_type", "trigger_value", "next_run_at"}.issubset(_WF_COLS):
         if getattr(wf, "trigger_type", None) == "interval" and getattr(wf, "trigger_value", None):
             setattr(wf, "next_run_at", datetime.utcnow() + timedelta(minutes=int(getattr(wf, "trigger_value"))))
     db.commit()
