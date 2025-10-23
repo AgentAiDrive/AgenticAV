@@ -1,29 +1,65 @@
 # core/workflow/service.py
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple, Set
 from datetime import datetime, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
 
 from .engine import execute_recipe_run
 from core.runstore_factory import make_runstore  # shared store
 
-# --- Compatibility import: different branches name the Workflow model differently ---
-try:
-    # Preferred / newer naming
-    from ..db.models import WorkflowDef  # type: ignore
-except Exception:
-    try:
-        # Common legacy naming
-        from ..db.models import Workflow as WorkflowDef  # type: ignore
-    except Exception:
-        # Less common alternative
-        from ..db.models import WorkflowDefinition as WorkflowDef  # type: ignore
-# ------------------------------------------------------------------------------
+
+# ---------- Dynamic resolver for the Workflow model ---------------------------
+def _resolve_workflow_model() -> Tuple[type, Set[str]]:
+    """
+    Find a workflow-like SQLAlchemy model in core.db.models by inspecting columns.
+    We pick the class that has at least:
+      - id, name, agent_id, recipe_id
+    and prefer the one that also has scheduling/status fields:
+      - trigger_type, trigger_value, next_run_at, last_run_at, enabled, status
+    Returns: (ModelClass, available_column_names)
+    """
+    from ..db import models as M  # lazy import to avoid early failures
+
+    best = None
+    best_score = -1
+    best_cols: Set[str] = set()
+
+    for attr, cls in vars(M).items():
+        if not isinstance(cls, type):
+            continue
+        table = getattr(cls, "__table__", None)
+        if table is None or not hasattr(table, "columns"):
+            continue
+        cols = set(table.columns.keys())
+        # required baseline fields
+        required = {"id", "name", "agent_id", "recipe_id"}
+        if not required.issubset(cols):
+            continue
+        # score by extra helpful columns being present
+        extras = {"trigger_type", "trigger_value", "next_run_at", "last_run_at", "enabled", "status"}
+        score = len(extras.intersection(cols))
+        if score > best_score:
+            best = cls
+            best_score = score
+            best_cols = cols
+
+    if best is None:
+        # Give a helpful message about what we looked for
+        raise ImportError(
+            "Could not resolve a workflow model from core.db.models. "
+            "Expected a SQLAlchemy class with columns: id, name, agent_id, recipe_id "
+            "and ideally trigger_type/trigger_value/next_run_at/last_run_at/enabled/status."
+        )
+    return best, best_cols
 
 
+# Bind the resolved model
+WorkflowDef, _WF_COLS = _resolve_workflow_model()
+
+
+# ---------- Public API --------------------------------------------------------
 def list_workflows(db: Session):
     """Return all workflows ordered by id (ascending)."""
     return db.query(WorkflowDef).order_by(WorkflowDef.id.asc()).all()
@@ -55,17 +91,27 @@ def create_workflow(
         raise ValueError("Workflow name cannot be empty.")
     if _workflow_name_exists(db, clean):
         raise ValueError(f"Workflow '{clean}' already exists.")
+
     wf = WorkflowDef(
         name=clean,
         agent_id=agent_id,
         recipe_id=recipe_id,
-        trigger_type=trigger_type,
-        trigger_value=trigger_value,
-        status="yellow",
-        enabled=1,
     )
-    if trigger_type == "interval" and trigger_value:
-        wf.next_run_at = datetime.utcnow() + timedelta(minutes=int(trigger_value))
+
+    # Optional fields guarded by presence in model
+    if "trigger_type" in _WF_COLS:
+        setattr(wf, "trigger_type", trigger_type)
+    if "trigger_value" in _WF_COLS:
+        setattr(wf, "trigger_value", trigger_value)
+    if "status" in _WF_COLS:
+        setattr(wf, "status", "yellow")
+    if "enabled" in _WF_COLS:
+        setattr(wf, "enabled", 1)
+
+    if (trigger_type == "interval" and trigger_value and
+            "next_run_at" in _WF_COLS):
+        setattr(wf, "next_run_at", datetime.utcnow() + timedelta(minutes=int(trigger_value)))
+
     db.add(wf)
     db.commit()
     db.refresh(wf)
@@ -89,22 +135,28 @@ def update_workflow(db: Session, wf_id: int, **kwargs):
 
     recipe_changed = False
     for k, v in kwargs.items():
-        if hasattr(wf, k) and v is not None:
+        if v is None:
+            continue
+        if k in _WF_COLS:
             if k == "recipe_id" and v != getattr(wf, k):
                 recipe_changed = True
             setattr(wf, k, v)
 
-        # Adjust schedule when trigger changes
-        if k == "trigger_type" and v == "manual":
-            wf.next_run_at = None
-        if k == "trigger_type" and v == "interval" and kwargs.get("trigger_value"):
-            wf.next_run_at = datetime.utcnow() + timedelta(minutes=int(kwargs["trigger_value"]))
+        # Adjust schedule when trigger changes (only if columns exist)
+        if k == "trigger_type" and "next_run_at" in _WF_COLS:
+            if v == "manual":
+                setattr(wf, "next_run_at", None)
+            elif v == "interval" and kwargs.get("trigger_value"):
+                setattr(wf, "next_run_at", datetime.utcnow() + timedelta(minutes=int(kwargs["trigger_value"])))
 
     # Reset status/schedule when the recipe changes
     if recipe_changed:
-        wf.last_run_at = None
-        wf.next_run_at = None
-        wf.status = "yellow"
+        if "last_run_at" in _WF_COLS:
+            setattr(wf, "last_run_at", None)
+        if "next_run_at" in _WF_COLS:
+            setattr(wf, "next_run_at", None)
+        if "status" in _WF_COLS:
+            setattr(wf, "status", "yellow")
 
     db.commit()
     db.refresh(wf)
@@ -127,10 +179,14 @@ def compute_status(wf: WorkflowDef) -> str:
       - 'green'  if last run within 24h
       - 'yellow' if last run within 7 days or never run
       - 'red'    otherwise
+    If the model lacks last_run_at, default to 'yellow'.
     """
-    if not getattr(wf, "last_run_at", None):
+    if "last_run_at" not in _WF_COLS:
         return "yellow"
-    delta = datetime.utcnow() - wf.last_run_at
+    last = getattr(wf, "last_run_at", None)
+    if not last:
+        return "yellow"
+    delta = datetime.utcnow() - last
     if delta.total_seconds() <= 24 * 3600:
         return "green"
     if delta.total_seconds() <= 7 * 24 * 3600:
@@ -141,74 +197,66 @@ def compute_status(wf: WorkflowDef) -> str:
 def run_now(db: Session, wf_id: int):
     """
     Trigger a workflow immediately and record it in the shared RunStore.
-    The RunStore entry shows status='running' during execution and is updated
-    on completion or error. Also updates the DB workflow timestamps/status.
+    Safe for schema variants: only touches columns that exist.
     """
     wf = db.query(WorkflowDef).filter(WorkflowDef.id == wf_id).first()
     if not wf:
         return None
 
     store = make_runstore()
+    with store.workflow_run(
+        workflow_id=str(wf.id),
+        name=getattr(wf, "name", f"wf-{wf.id}"),
+        agent_id=getattr(wf, "agent_id"),
+        recipe_id=getattr(wf, "recipe_id"),
+        trigger="manual",
+        meta={"workflow_name": getattr(wf, "name", f"wf-{wf.id}")},
+    ) as rec:
+        # Execute the recipe (primary DB run)
+        run = execute_recipe_run(db, agent_id=getattr(wf, "agent_id"), recipe_id=getattr(wf, "recipe_id"))
+        # Optional: log a step in runstore
+        rec.step(
+            phase="act",
+            message=f"Executed recipe {getattr(run, 'recipe_id', getattr(wf, 'recipe_id', None))}",
+            payload=None,
+            result={"status": "completed"},
+        )
 
-    try:
-        with store.workflow_run(
-            workflow_id=str(wf.id),
-            name=wf.name,
-            agent_id=wf.agent_id,
-            recipe_id=wf.recipe_id,
-            trigger="manual",
-            meta={"workflow_name": wf.name},
-        ) as rec:
-            # Execute the recipe (primary DB run)
-            run = execute_recipe_run(db, agent_id=wf.agent_id, recipe_id=wf.recipe_id)
-
-            # Optional: log a step in runstore
-            rec.step(
-                phase="act",
-                message=f"Executed recipe {getattr(run, 'recipe_id', wf.recipe_id)}",
-                payload=None,
-                result={"status": "completed"},
-            )
-
-    except Exception as e:
-        # Best-effort: mark workflow 'yellow' and propagate the error
-        try:
-            wf.last_run_at = datetime.utcnow()
-            wf.status = "yellow"
-            if wf.trigger_type == "interval" and wf.trigger_value:
-                wf.next_run_at = datetime.utcnow() + timedelta(minutes=int(wf.trigger_value))
-            db.commit()
-            db.refresh(wf)
-        finally:
-            # Re-raise so callers can surface the failure
-            raise
-
-    # Success path: update workflow timestamps/status
-    wf.last_run_at = datetime.utcnow()
-    wf.status = compute_status(wf)
-    if wf.trigger_type == "interval" and wf.trigger_value:
-        wf.next_run_at = datetime.utcnow() + timedelta(minutes=int(wf.trigger_value))
+    # Success path: update workflow timestamps/status if columns exist
+    if "last_run_at" in _WF_COLS:
+        setattr(wf, "last_run_at", datetime.utcnow())
+    if "status" in _WF_COLS:
+        setattr(wf, "status", compute_status(wf))
+    if "trigger_type" in _WF_COLS and "trigger_value" in _WF_COLS and "next_run_at" in _WF_COLS:
+        if getattr(wf, "trigger_type", None) == "interval" and getattr(wf, "trigger_value", None):
+            setattr(wf, "next_run_at", datetime.utcnow() + timedelta(minutes=int(getattr(wf, "trigger_value"))))
     db.commit()
     db.refresh(wf)
     return run
 
 
 def tick(db: Session) -> int:
-    """Scan for due interval-triggered workflows and run them."""
+    """
+    Run all due interval-triggered workflows.
+    If the model lacks scheduling columns, returns 0 (nothing to do).
+    """
+    sched_cols = {"enabled", "trigger_type", "next_run_at"}
+    if not sched_cols.issubset(_WF_COLS):
+        return 0
+
     now = datetime.utcnow()
     due = (
         db.query(WorkflowDef)
         .filter(
-            WorkflowDef.enabled == 1,
-            WorkflowDef.trigger_type == "interval",
-            WorkflowDef.next_run_at != None,  # noqa: E711
-            WorkflowDef.next_run_at <= now,
+            getattr(WorkflowDef, "enabled") == 1,
+            getattr(WorkflowDef, "trigger_type") == "interval",
+            getattr(WorkflowDef, "next_run_at") != None,  # noqa: E711
+            getattr(WorkflowDef, "next_run_at") <= now,
         )
         .all()
     )
     count = 0
     for wf in due:
-        # Run each due workflow; let errors bubble up to the UI
         run_now(db, wf.id)
         count += 1
     return count
