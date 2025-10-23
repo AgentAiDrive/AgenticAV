@@ -2,41 +2,29 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Tuple
-
+from typing import List, Tuple
 from sqlalchemy.orm import Session, declarative_base
-from sqlalchemy import (
-    Column, Integer, String, Boolean, Text, ForeignKey, DateTime
-)
+from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime
 
-# --- Fallback ORM (used only if your core.db.models doesn't define ChatThread/ChatMessage)
 Base = declarative_base()
 
-class _FBChatThread(Base):  # fallback table
+class _FBChatThread(Base):
     __tablename__ = "chat_threads"
     id = Column(Integer, primary_key=True, autoincrement=True)
     title = Column(String(255), nullable=False)
     archived = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-class _FBChatMessage(Base):  # fallback table
+class _FBChatMessage(Base):
     __tablename__ = "chat_messages"
     id = Column(Integer, primary_key=True, autoincrement=True)
     thread_id = Column(Integer, ForeignKey("chat_threads.id", ondelete="CASCADE"), nullable=False, index=True)
-    role = Column(String(32), nullable=False)       # "user" | "assistant"
+    role = Column(String(32), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-__all__ = [
-    "create_thread",
-    "list_threads",
-    "add_message",
-    "get_messages",
-    "archive_thread",
-    "clear_thread",
-]
+__all__ = ["create_thread","list_threads","add_message","get_messages","archive_thread","clear_thread"]
 
-# -------- internals -----------------------------------------------------------
 def _have_attr(model, name: str) -> bool:
     try:
         return name in model.__table__.columns.keys()
@@ -44,37 +32,22 @@ def _have_attr(model, name: str) -> bool:
         return hasattr(model, name)
 
 def _get_models(db: Session) -> Tuple[type, type, bool]:
-    """
-    Returns (ChatThreadModel, ChatMessageModel, used_fallback: bool).
-    If your project defines core.db.models.ChatThread/ChatMessage, we use them.
-    Otherwise we create minimal fallback tables on the bound engine.
-    """
     try:
         from core.db.models import ChatThread as MThread, ChatMessage as MMessage  # type: ignore
         return MThread, MMessage, False
     except Exception:
-        # Create fallback tables if missing
         bind = db.get_bind()
         Base.metadata.create_all(bind)
         return _FBChatThread, _FBChatMessage, True
 
-# -------- public API ----------------------------------------------------------
 def create_thread(db: Session, title: str):
     T, _, _ = _get_models(db)
-    # Construct with only supported columns
-    kwargs = {}
-    if _have_attr(T, "title"): kwargs["title"] = title
-    if _have_attr(T, "name") and "title" not in kwargs: kwargs["name"] = title  # alt naming
-    obj = T(**kwargs)  # type: ignore[arg-type]
-    # Defaults if attributes exist
+    obj = T(**({"title": title} if _have_attr(T, "title") else {"name": title}))  # type: ignore[arg-type]
     if hasattr(obj, "archived") and getattr(obj, "archived", None) is None:
         setattr(obj, "archived", False)
     if hasattr(obj, "created_at") and getattr(obj, "created_at", None) is None:
         setattr(obj, "created_at", datetime.utcnow())
-    db.add(obj)
-    db.commit()
-    db.refresh(obj)
-    return obj
+    db.add(obj); db.commit(); db.refresh(obj); return obj
 
 def list_threads(db: Session):
     T, _, _ = _get_models(db)
@@ -87,7 +60,6 @@ def list_threads(db: Session):
 
 def add_message(db: Session, thread_id: int, role: str, content: str):
     _, M, _ = _get_models(db)
-    # Support alternate FK names if your model differs
     kwargs = {"role": role, "content": content}
     if _have_attr(M, "thread_id"):
         kwargs["thread_id"] = thread_id
@@ -96,14 +68,10 @@ def add_message(db: Session, thread_id: int, role: str, content: str):
     obj = M(**kwargs)  # type: ignore[arg-type]
     if hasattr(obj, "created_at") and getattr(obj, "created_at", None) is None:
         setattr(obj, "created_at", datetime.utcnow())
-    db.add(obj)
-    db.commit()
-    db.refresh(obj)
-    return obj
+    db.add(obj); db.commit(); db.refresh(obj); return obj
 
 def get_messages(db: Session, thread_id: int) -> List[dict]:
     _, M, _ = _get_models(db)
-    # Build query by whichever FK column exists
     q = db.query(M)
     if _have_attr(M, "thread_id"):
         q = q.filter(getattr(M, "thread_id") == thread_id)
@@ -112,18 +80,12 @@ def get_messages(db: Session, thread_id: int) -> List[dict]:
     if _have_attr(M, "created_at"):
         q = q.order_by(getattr(M, "created_at").asc())
     rows = q.all()
-    out: List[dict] = []
-    for r in rows:
-        role = getattr(r, "role", "assistant")
-        content = getattr(r, "content", "")
-        out.append({"role": role, "content": content})
-    return out
+    return [{"role": getattr(r, "role", "assistant"), "content": getattr(r, "content", "")} for r in rows]
 
 def archive_thread(db: Session, thread_id: int) -> None:
     T, _, _ = _get_models(db)
     obj = db.query(T).get(thread_id)  # type: ignore[arg-type]
-    if not obj:
-        return
+    if not obj: return
     if hasattr(obj, "archived"):
         setattr(obj, "archived", True)
     db.commit()
