@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Tuple
 from sqlalchemy.orm import Session, declarative_base
 from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, DateTime
-
+from sqlalchemy.exc import OperationalError
 Base = declarative_base()
 
 class _FBChatThread(Base):
@@ -34,10 +34,16 @@ def _have_attr(model, name: str) -> bool:
 def _get_models(db: Session) -> Tuple[type, type, bool]:
     try:
         from core.db.models import ChatThread as MThread, ChatMessage as MMessage  # type: ignore
+        # Ensure tables exist for the real models
+        bind = db.get_bind()
+        # checkfirst=True prevents errors if already present
+        MThread.__table__.create(bind, checkfirst=True)
+        MMessage.__table__.create(bind, checkfirst=True)
         return MThread, MMessage, False
     except Exception:
+        # Fall back to lightweight local models and ensure those tables exist
         bind = db.get_bind()
-        Base.metadata.create_all(bind)
+        Base.metadata.create_all(bind, checkfirst=True)
         return _FBChatThread, _FBChatMessage, True
 
 def create_thread(db: Session, title: str):
@@ -56,7 +62,17 @@ def list_threads(db: Session):
         q = q.filter(getattr(T, "archived") == False)  # noqa: E712
     if _have_attr(T, "created_at"):
         q = q.order_by(getattr(T, "created_at").desc())
-    return list(q.all())
+    try:
+        return list(q.all())
+    except OperationalError:
+        # If a race or a missing table slipped through, create and retry once.
+        bind = db.get_bind()
+        try:
+            T.__table__.create(bind, checkfirst=True)
+        except Exception:
+            pass
+        return list(db.query(T).all())
+
 
 def add_message(db: Session, thread_id: int, role: str, content: str):
     _, M, _ = _get_models(db)
@@ -100,3 +116,7 @@ def clear_thread(db: Session, thread_id: int) -> None:
     for m in q.all():
         db.delete(m)
     db.commit()
+
+
+
+
