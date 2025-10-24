@@ -5,7 +5,6 @@ from io import BytesIO
 import requests
 from PIL import Image, UnidentifiedImageError
 import streamlit as st
-from core.db.seed import init_db
 
 # ---------- Icon: fetch from GitHub user-attachments BEFORE any st.* calls ----------
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
