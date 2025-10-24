@@ -5,7 +5,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 # ✅ keep your imports
-from core.db.seed import seed_demo
+##### REMOVES ERROR ######
+##### from core.db.seed import seed_demo
+#####
 from core.ui.page_tips import show as show_tip
 
 # ---------- constants ----------
