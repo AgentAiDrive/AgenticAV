@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 from datetime import datetime
 from core.db.session import get_session
+#from core.db.seed import init_db
 from core.db.models import Agent, Recipe
 from core.workflow.orchestrator import run_ipav_pipeline
 
