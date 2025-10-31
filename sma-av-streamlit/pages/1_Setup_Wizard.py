@@ -1,14 +1,108 @@
+# sma-av-streamlit/pages/1_Setup_Wizard.py
+from __future__ import annotations
+
 import json
 from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ✅ keep your imports
-##### REMOVES ERROR ######
-##### from core.db.seed import seed_demo
-#####
+# Keep your imports (no fragile top-level import of seed_demo)
 from core.ui.page_tips import show as show_tip
+
+# Added: DB + ORM utilities for safe seeding and table creation
+from sqlalchemy.exc import SQLAlchemyError  # noqa: F401 (reserved for future detailed handling)
+from core.db.session import get_session
+from core.db.models import Base, Agent, Recipe
+
+
+# ---------- robust seeding (no import-time failures) ----------
+def seed_demo_safe():
+    """Initialize DB tables and seed minimal demo data, with robust fallbacks.
+
+    Order of operations:
+      1) Ensure tables exist via Base.metadata.create_all
+      2) Try project's real seeder: core.db.seed.seed_demo()
+      3) If the real seeder is unavailable or fails, create a minimal Agent + Recipe
+    """
+    # 1) Ensure tables exist
+    try:
+        with get_session() as db:
+            bind = db.get_bind()
+            Base.metadata.create_all(bind=bind)
+    except Exception as e:
+        st.error("Failed to initialize database tables.")
+        with st.expander("Details"):
+            st.exception(e)
+        return
+
+    # 2) Try real seeder (deferred import to avoid import-time crashes)
+    real_seed_err = None
+    try:
+        from core.db.seed import seed_demo as _real_seed_demo  # type: ignore
+    except Exception as imp_err:
+        _real_seed_demo = None
+        real_seed_err = imp_err
+
+    if _real_seed_demo:
+        try:
+            _real_seed_demo()
+            st.success("Seeded demo data via core.db.seed.")
+            return
+        except Exception as call_err:
+            real_seed_err = call_err  # fall through to lightweight seed
+
+    # 3) Lightweight fallback seed
+    created = {"agents": 0, "recipes": 0}
+    try:
+        with get_session() as db:
+            # Agent (only if none exist)
+            try:
+                has_agent = db.query(Agent).first() is not None
+            except Exception:
+                has_agent = False
+            if not has_agent:
+                try:
+                    a = Agent(name="Orchestrator (Demo)")
+                    db.add(a)
+                    db.commit()
+                    created["agents"] += 1
+                except Exception:
+                    db.rollback()
+
+            # Recipe (only if none exist)
+            try:
+                has_recipe = db.query(Recipe).first() is not None
+            except Exception:
+                has_recipe = False
+            if not has_recipe:
+                try:
+                    r = Recipe(name="Baseline Capture (Demo)")
+                    # If your Recipe model has a 'yaml' or 'body' column, set whichever exists
+                    if hasattr(r, "yaml"):
+                        setattr(r, "yaml", "version: '1.0'\nrecipe: {}")
+                    elif hasattr(r, "body"):
+                        setattr(r, "body", "version: '1.0'\nrecipe: {}")
+                    db.add(r)
+                    db.commit()
+                    created["recipes"] += 1
+                except Exception:
+                    db.rollback()
+    except Exception as e:
+        st.error("Lightweight seeding failed.")
+        with st.expander("Details"):
+            if real_seed_err:
+                st.write("Real seeder error:")
+                st.exception(real_seed_err)
+            st.write("Fallback error:")
+            st.exception(e)
+        return
+
+    msg_parts = []
+    if real_seed_err:
+        msg_parts.append("Seeder unavailable; used fallback.")
+    msg_parts.append(f"Created agents +{created['agents']}, recipes +{created['recipes']}.")
+    st.success(" ".join(msg_parts))
 
 # ---------- constants ----------
 DEFAULT_PLATFORMS = [
