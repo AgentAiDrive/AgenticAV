@@ -5,11 +5,12 @@ import streamlit as st
 from io import BytesIO
 import requests
 from PIL import Image, UnidentifiedImageError
+
+# Database seed import
 from core.db.seed import init_db
 
-# ---------- Icon: fetch from GitHub user-attachments BEFORE any st.* calls ----------
+# Icon: fetch from GitHub user-attachments BEFORE any st.* calls
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
-
 ICON_URL = "https://raw.githubusercontent.com/AgentAiDrive/AV-AIops/refs/heads/IPAV-Agents/sma-av-streamlit/ipav.ico"
 
 def _fetch_pil_image(url: str) -> Image.Image | None:
@@ -25,13 +26,11 @@ def _fetch_pil_image(url: str) -> Image.Image | None:
 _icon_img = _fetch_pil_image(ICON_URL)
 
 # ---------- Page config (must be first Streamlit command) ----------
-
-st.set_page_config(page_title="Agentic Ops IPAV", page_icon= _icon_img, layout="wide")
+st.set_page_config(page_title="Agentic Ops IPAV", page_icon=_icon_img, layout="wide")
 
 # ---------- Header ----------
 st.image(LOGO_URL, caption="", width=293)
-st.title("Agentic Ops - IPAV SOP Workflow Orchestration")
-# Show the same image under the title (keeps README width ≈93)
+st.title("Agentic Ops – IPAV SOP Workflow Orchestration")
 st.write("Use sidebar to navigate.")
 
 def model_light():
@@ -48,11 +47,11 @@ try:
 except Exception:
     PAGE_TIPS = {
         "Setup Wizard": (
-            "Initialize DB and seed demo content: fixed system agents (Baseline, EventForm, Intake, Plan, Act, Verify, Learn),"
+            "Initialize DB and seed demo content: fixed system agents (Baseline, EventForm, Intake, Plan, Act, Verify, Learn), "
             "sample Orchestrator + Fixed-Agent recipes, and mock MCP tools. Idempotent—safe to run multiple times."
         ),
         "Settings": (
-            "Select active LLM provider (OpenAI ↔ Anthropic). Shows key source and MCP mock status."
+            "Select active LLM provider (OpenAI ↔ Anthropic). Shows key source and MCP mock status. "
             "No silent fallback—set a valid API key in secrets/env."
         ),
         "Chat": (
@@ -105,7 +104,7 @@ runbook_path = next((p for p in candidates if p.exists()), None)
 # ---------------- Load runbook text ----------------
 if not runbook_path:
     st.warning("RUNBOOK.md not found. Showing a minimal placeholder.")
-    runbook_md = """# SMA AV-AI Ops — Runbook (Placeholder)
+    runbook_md = """# Agentic Ops IPAV — Runbook (Placeholder)
 
 Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `RUNBOOK.md`.
 """
@@ -160,21 +159,5 @@ st.download_button("Download RUNBOOK.md", data=runbook_md, file_name="RUNBOOK.md
 st.divider()
 st.markdown(filtered_md, unsafe_allow_html=False)
 
-# ---------------- Optional debug (moved to bottom) ----------------
-def _get_query_params():
-    try:
-        # Newer Streamlit
-        return dict(st.query_params)
-    except Exception:
-        # Back-compat
-        return st.experimental_get_query_params()  # type: ignore[attr-defined]
-
-qp = _get_query_params()
-debug_on = str(qp.get("debug", ["0"])[0]).lower() in ("1", "true", "yes")
-
-with st.expander("Debug: where I'm looking for RUNBOOK.md", expanded=debug_on):
-    st.caption(f"App root resolved to: `{APP_ROOT}`")
-    st.caption(f"Working dir: `{CWD}`")
-    st.code("\n".join(str(c) for c in candidates), language="text")
-
+# ---------------- Initialize Database ----------------
 init_db()
