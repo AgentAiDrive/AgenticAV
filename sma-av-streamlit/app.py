@@ -5,15 +5,13 @@ import streamlit as st
 from io import BytesIO
 import requests
 from PIL import Image, UnidentifiedImageError
-
-# Try to import DB init, warn if broken
-# Safe init_db import with scoped fallback
+# Robust init_db loader with fallback and captured error message
 try:
     from core.db.seed import init_db as _imported_init_db
     init_db = _imported_init_db
 except Exception as import_error:
-    def init_db():
-        st.warning(f"⚠️ init_db unavailable: {import_error}. Using fallback.")
+    def init_db(err=import_error):  # capture error via default arg
+        st.warning(f"⚠️ init_db unavailable: {err}. Using fallback.")
 
 
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
