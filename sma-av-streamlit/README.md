@@ -1,19 +1,31 @@
 <img width="120" height="89" alt="ipav_agentic av -blue" src="https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d" />
-**The Agentic Ops IPAV application provides a suite of features for creating AI-driven operational workflows using NLP, MCP and converting SOP's into agentic recipes YAML and JSON.**
+**Agentic AV Ops is designed to  provides a suite of features for creating AI-driven operational workflows converting SOP's using NLP, into agentic recipes exectued by Agents through MCP's and the IPAV framework.**
+
+Go to Runbook.md to view the user manual explaining each feature page and how to use it, step by step. (The features correspond to the pages in the app’s sidebar navigation.)
+
+**Agentic AV Ops** Streamlit Application
+🏁 Setup Wizard
+💬 Chat
+🤖 Agents
+📜 Recipes
+🧰 MCP Tools
+⚙️ Settings
+🧩 Workflows
+🧩 Fixed Workflows (IPAV Orchestrator)
+📊 Dashboard
+❓ Help & Runbook
+🔎 Run Details
 
 **Try Demo Now:**
 https://agenticav.streamlit.app/
-
-**Do NOT Save Key in Online Demo!**
-
+**Do NOT Save Keys in Online Demo!**
 
 **Local Development Tips**
-
 To run the application locally:
 
 **Clone the repository:**
 # Make sure IPAV-Agents branch selected
-git clone https://github.com/AgentAiDrive/AV-AIops/sma-av-streamlit.git
+git clone https://github.com/AgentAiDrive/AgenticAV/sma-av-streamlit.git
 cd AV-AIops
 
 Create a virtual environment and install dependencies:
