@@ -1,24 +1,64 @@
-# sma-av-streamlit/pages/7_🧩_Workflows.py
+# sma-av-streamlit/pages/7_Workflows.py
 from __future__ import annotations
 
 import streamlit as st
+from datetime import datetime
+from pathlib import Path
+
 from core.db.session import get_session
-from core.db.seed import init_db
-from core.db.models import Agent, Recipe
+from core.db.models import Base, Agent, Recipe
 from core.workflow.service import (
     list_workflows, create_workflow, update_workflow, delete_workflow,
     run_now, compute_status, tick
 )
 from core.ui.page_tips import show as show_tip
 from core.io.port import export_zip, import_zip
-from datetime import datetime
-from pathlib import Path
 
 PAGE_KEY = "Workflows"
 show_tip(PAGE_KEY)
 
 st.title("🧩 Workflows")
-init_db()
+
+# ---------- Robust, one-time DB init (no fragile seed import at module import time) ----------
+def _safe_init_db_once():
+    """Try real seeder; if unavailable, create tables from models."""
+    if st.session_state.get("_db_init_done"):
+        return
+
+    seeder_err = None
+    try:
+        from core.db.seed import init_db as _real_init_db  # deferred import
+    except Exception as e:
+        _real_init_db = None
+        seeder_err = e
+
+    try:
+        if _real_init_db:
+            _real_init_db()
+        else:
+            # Fallback: ensure tables exist so the page can function
+            with get_session() as s:
+                bind = s.get_bind()
+                Base.metadata.create_all(bind=bind)
+
+        st.session_state["_db_init_done"] = True
+        if seeder_err:
+            st.info(
+                "Seeding module unavailable; created tables from models instead. "
+                "If you expect sample data, run your project's seeding command."
+            )
+    except Exception as e:
+        st.session_state["_db_init_done"] = False
+        st.error("Database initialization failed; running in limited mode.")
+        with st.expander("DB init error (details)"):
+            if seeder_err:
+                st.write("Seeder import error:")
+                st.exception(seeder_err)
+            st.write("Initialization error:")
+            st.exception(e)
+
+_safe_init_db_once()
+# -------------------------------------------------------------------------------------------
 
 with get_session() as db:  # keep DB open for the whole page render
     wfs = list_workflows(db)
@@ -125,7 +165,6 @@ Trigger: `{wf.trigger_type}` {wf.trigger_value or ''}"""
                         try:
                             with st.spinner("Executing workflow..."):
                                 run = run_now(db, wf.id)
-                            # Show returned id when available
                             rid = getattr(run, "id", None) if run else None
                             st.toast(f"Run {rid or '—'} completed.", icon="✅")
                         except Exception as e:
@@ -164,8 +203,6 @@ Trigger: `{wf.trigger_type}` {wf.trigger_value or ''}"""
                         st.rerun()
 
                 cols[4].write(f"Last: {wf.last_run_at or '—'} · Next: {wf.next_run_at or '—'} · Status: {status}")
-
-# --- Import to Writable Directory - Create Directory----------------------------------------------------------
 
 # --- Import / Export ----------------------------------------------------------
 st.divider()
