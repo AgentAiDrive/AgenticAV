@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import streamlit as st
 from datetime import datetime
-from core.db.session import get_session
-from core.db.seed import init_db
 from core.db.models import Agent, Recipe
 from core.workflow.orchestrator import run_ipav_pipeline
+from core.db.session import get_session
+try:
+    from core.db.seed import init_db
+except Exception as e:
+    def init_db():
+        st.warning(f"DB seeding unavailable: {e}. Continuing without seeding.")
 
 PAGE_KEY = "FixedWorkflows"
 st.title("🧩 Fixed Agent Orchestrator")
-init_db()
 
 with get_session() as db:
     agent_opts = {a.id: a.name for a in db.query(Agent).order_by(Agent.name).all()}
