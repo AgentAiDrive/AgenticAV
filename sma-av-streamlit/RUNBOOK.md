@@ -1,4 +1,6 @@
-# **Agentic Ops - IPAV Workflow Orchestration — Runbook**
+# **Agentic AV Ops - IPAV Workflow Orchestration — Runbook**
+
+https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d
 
 **Goal**  
 Operate AV workflows Convert SOP's to Agentic workflows.  Create (Agents + Recipes + MCP Tools + Workflows) and observe results on a Dashboard, all inside the **IPAV** lifecycle: **Intake → Plan → Act → Verify**.
