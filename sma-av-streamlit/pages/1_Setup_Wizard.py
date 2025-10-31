@@ -104,6 +104,7 @@ def seed_demo_safe():
     msg_parts.append(f"Created agents +{created['agents']}, recipes +{created['recipes']}.")
     st.success(" ".join(msg_parts))
 
+
 # ---------- constants ----------
 DEFAULT_PLATFORMS = [
     {"key": "zoom_meetings", "label": "Zoom Meetings"},
@@ -115,6 +116,7 @@ DEFAULT_PLATFORMS = [
     {"key": "webex_calling", "label": "Webex Calling"},
     {"key": "google_meet", "label": "Google Meet add-ons"},
 ]
+
 
 # ---------- utils ----------
 def yaml_escape(s: str) -> str:
@@ -196,7 +198,6 @@ def build_yaml(payload: dict) -> str:
             f'      - key: {p.get("key")}\n'
             f'        label: "{yaml_escape(p.get("label", ""))}"\n'
             f'        licenses: {p.get("licenses", 0)}\n'
-            # Preserve 0 values; do not convert to None when cost or underuse percent is zero.
             f'        monthly_cost_per_license_usd: {p.get("monthly_cost_per_license_usd", 0)}\n'
             f'        underuse_percent: {p.get("underuse_percent", 0)}'
         )
@@ -387,8 +388,7 @@ st.title("🏁 Setup Wizard")
 st.write("→ → **Click Button** to Initialize the database, seed demo agents, tools, and recipes.")
 
 if st.button("Initialize database & seed demo data"):
-    seed_demo()
-    st.success("Seed complete.")
+    seed_demo_safe()
 
 st.divider()
 st.header("📊 Baseline Workflow")
