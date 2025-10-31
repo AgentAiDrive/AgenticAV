@@ -7,11 +7,14 @@ import requests
 from PIL import Image, UnidentifiedImageError
 
 # Try to import DB init, warn if broken
+# Safe init_db import with scoped fallback
 try:
-    from core.db.seed import init_db
-except Exception as e:
+    from core.db.seed import init_db as _imported_init_db
+    init_db = _imported_init_db
+except Exception as import_error:
     def init_db():
-        st.warning(f"⚠️ init_db failed to import: {e}")
+        st.warning(f"⚠️ init_db unavailable: {import_error}. Using fallback.")
+
 
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
 ICON_URL = "https://raw.githubusercontent.com/AgentAiDrive/AV-AIops/refs/heads/IPAV-Agents/sma-av-streamlit/ipav.ico"
