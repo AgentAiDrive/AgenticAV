@@ -1,5 +1,4 @@
-  
-<img width="441" height="304" alt="image" src="https://github.com/user-attachments/assets/06bf11d3-eb3c-4946-9223-e1ee0fac3579" /> 
+##
 
 **Agentic AV Ops - IPAV Workflow Orchestration — Runbook**
 
