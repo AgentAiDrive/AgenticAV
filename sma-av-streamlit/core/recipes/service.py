@@ -7,7 +7,10 @@ from typing import Union, Any
 
 import yaml
 
-RECIPES_DIR = Path("recipes")
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_RECIPES_DIR = PACKAGE_ROOT / "recipes"
+DEFAULT_RECIPES_DIR = Path("recipes")
+RECIPES_DIR = DEFAULT_RECIPES_DIR
 
 __all__ = [
     "ensure_recipes_dir",
@@ -70,8 +73,17 @@ def load_recipe_dict(source: Union[dict, str, Path, Any]) -> dict:
         p = Path(str(source))
         candidate_paths = [p]
         if not p.is_absolute():
-            candidate_paths.append(RECIPES_DIR / p)
+            candidate_paths.extend(
+                path for path in (
+                    RECIPES_DIR / p,
+                    PACKAGE_RECIPES_DIR / p,
+                )
+            )
+        seen = set()
         for candidate in candidate_paths:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
             if candidate.exists():
                 yaml_text = _read_text_from_path(candidate)
                 break
