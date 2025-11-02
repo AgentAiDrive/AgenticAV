@@ -31,6 +31,11 @@ def execute_recipe_run(db: Session, agent_id: int, recipe_id: int) -> Run:
     db.add(run); db.commit(); db.refresh(run)
     recipe_dict = load_recipe_dict(recipe.yaml_path)
     for phase, message in run_workflow_phases(recipe_dict):
-        attach_json(db, run_id=run.id, payload={"phase": phase, "message": f"{agent.name}: {message}"})
+        attach_json(
+            db,
+            run_id=run.id,
+            obj={"phase": phase, "message": f"{agent.name}: {message}"},
+            kind="phase",
+        )
     run.status = "completed"; db.commit(); db.refresh(run)
     return run
