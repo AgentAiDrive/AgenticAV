@@ -63,7 +63,7 @@ def seed_demo_safe():
                 has_agent = False
             if not has_agent:
                 try:
-                    a = Agent(name="Orchestrator (Demo)")
+                    a = Agent(name="Orchestrator (Demo)", config_json={})
                     db.add(a)
                     db.commit()
                     created["agents"] += 1

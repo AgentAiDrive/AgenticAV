@@ -2,7 +2,16 @@
 from __future__ import annotations
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
+    Column,
+    Integer,
+    String,
+    Text,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    JSON,
+    text,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -13,6 +22,12 @@ class Agent(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
     domain = Column(String(255), nullable=True)
+    config_json = Column(
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self) -> str:
@@ -40,6 +55,13 @@ class Run(Base):
 
     agent = relationship("Agent", lazy="joined")
     recipe = relationship("Recipe", lazy="joined")
+    evidence = relationship(
+        "RunEvidence",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="RunEvidence.id",
+    )
 
     def __repr__(self) -> str:
         return f"<Run id={self.id} agent_id={self.agent_id} recipe_id={self.recipe_id} status={self.status!r}>"
@@ -87,6 +109,21 @@ class ChatMessage(Base):
     def __repr__(self) -> str:
         return f"<ChatMessage id={self.id} thread_id={self.thread_id} role={self.role!r}>"
 
+
+class RunEvidence(Base):
+    __tablename__ = "run_evidence"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(32), nullable=False, default="json")
+    label = Column(String(255), nullable=False, default="")
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    run = relationship("Run", back_populates="evidence")
+
+    def __repr__(self) -> str:
+        return f"<RunEvidence id={self.id} run_id={self.run_id} kind={self.kind!r}>"
+
 __all__ = [
     "Base",
     "Agent",
@@ -95,4 +132,5 @@ __all__ = [
     "Tool",
     "ChatThread",
     "ChatMessage",
+    "RunEvidence",
 ]

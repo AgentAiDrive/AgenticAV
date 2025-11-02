@@ -7,6 +7,10 @@ from pathlib import Path
 
 from core.db.session import get_session
 from core.db.models import Base, Agent, Recipe
+from core.db.hotfix_migrations import (
+    ensure_recipes_yaml_column,
+    ensure_agents_config_json_column,
+)
 from core.workflow.service import (
     list_workflows, create_workflow, update_workflow, delete_workflow,
     run_now, compute_status, tick
@@ -40,6 +44,8 @@ def _safe_init_db_once():
             with get_session() as s:
                 bind = s.get_bind()
                 Base.metadata.create_all(bind=bind)
+            ensure_recipes_yaml_column()
+            ensure_agents_config_json_column()
 
         st.session_state["_db_init_done"] = True
         if seeder_err:
