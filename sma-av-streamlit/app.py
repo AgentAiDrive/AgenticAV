@@ -79,6 +79,10 @@ except Exception:
             "Wire Orchestrator + Agent + Trigger (manual or cron). Approvals can gate risky steps. "
             "Runs are recorded with artifacts and evidence."
         ),
+            "Fixed-Workflows": (
+            "Wire Fixed Agent Orchestrator + Recipe + JSON -> Run Pipeline (manual or cron)."
+            "Runs are recorded with artifacts and evidence."
+        ),
         "Dashboard": (
             "Metrics: run count, pass %, p95, MTTR, automation %. "
             "Drill into Run Details to inspect step logs, approvals, and generated KBs."
