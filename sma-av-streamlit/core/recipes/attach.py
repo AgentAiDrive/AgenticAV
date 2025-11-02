@@ -21,7 +21,7 @@ def attach_recipe_to_agent(db, agent_name: str, recipe_name: str, yaml_text: str
         .first()
     )
     if not agent:
-        agent = Agent(name=agent_name)
+        agent = Agent(name=agent_name, config_json={})
         db.add(agent)
         db.commit()
         db.refresh(agent)
