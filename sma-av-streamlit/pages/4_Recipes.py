@@ -251,11 +251,13 @@ with get_session() as db:  # type: ignore
             metrics = store.recipe_metrics(r.id)
             success = metrics.get("success_rate", 0.0)
             dot = "🟢" if success >= 80 else ("🟡" if success >= 50 else "🔴")
-            updated_at = (
-                r.updated_at.strftime("%Y-%m-%d %H:%M")
-                if isinstance(r.updated_at, datetime)
-                else str(r.updated_at)
-            )
+            raw_updated = getattr(r, "updated_at", None) or getattr(r, "created_at", None)
+            if isinstance(raw_updated, datetime):
+                updated_at = raw_updated.strftime("%Y-%m-%d %H:%M")
+            elif raw_updated is None:
+                updated_at = "unknown"
+            else:
+                updated_at = str(raw_updated)
             git_hint = _git_commit_hint(path)
             st.caption(
                 f"{dot} Success: {success:.1f}% over {metrics.get('runs', 0)} run(s) · "
