@@ -3,7 +3,6 @@ import os
 from sqlalchemy.orm import Session
 from .session import engine, get_session
 from .models import Base, Agent, Recipe, Tool
-from .hotfix_migrations import ensure_recipes_yaml_column, ensure_agents_config_json_column
 
 RECIPES_DIR = os.path.join(os.getcwd(), "recipes")
 
@@ -25,8 +24,6 @@ REGISTRY = {
 def init_db():
     """Create all tables."""
     Base.metadata.create_all(bind=engine)
-    ensure_recipes_yaml_column()
-    ensure_agents_config_json_column()
 
 def seed_demo():
     """Seed database with agents, recipes, and tools."""
@@ -39,7 +36,7 @@ def seed_demo():
             ("Device Monitoring", "device-monitoring")
         ]:
             if not db.query(Agent).filter_by(name=name).first():
-                db.add(Agent(name=name, domain=domain, config_json={}))
+                db.add(Agent(name=name, domain=domain))
 
         # Seed recipes (from file names only)
         if os.path.isdir(RECIPES_DIR):
