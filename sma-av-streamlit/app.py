@@ -23,11 +23,11 @@ def _fetch_pil_image(url: str) -> Image.Image | None:
 _icon_img = _fetch_pil_image(ICON_URL)
 
 # ---------- Page config (must be first Streamlit command) ----------
-st.set_page_config(page_title="Agentic Ops IPAV", page_icon=_icon_img, layout="wide")
+st.set_page_config(page_title="Agentic AV Ops", page_icon=_icon_img, layout="wide")
 
 # ---------- Header ----------
 st.image(LOGO_URL, caption="", width=293)
-st.title("Agentic Ops - IPAV SOP Workflow Orchestration")
+st.title("Agentic AV Ops - SOP Workflow Orchestration")
 st.write("Use sidebar to navigate.")
 
 def model_light():
@@ -77,6 +77,10 @@ except Exception:
         ),
         "Workflows": (
             "Wire Orchestrator + Agent + Trigger (manual or cron). Approvals can gate risky steps. "
+            "Runs are recorded with artifacts and evidence."
+        ),
+         "Fixed-Workflows": (
+            "Wire Fixed Agent Orchestrator + Recipe + JSON -> Run Pipeline (manual or cron)."
             "Runs are recorded with artifacts and evidence."
         ),
         "Dashboard": (
