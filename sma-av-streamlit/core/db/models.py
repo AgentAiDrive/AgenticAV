@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index
+    Column,
+    Integer,
+    String,
+    Text,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    JSON,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -13,6 +21,7 @@ class Agent(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True, index=True)
     domain = Column(String(255), nullable=True)
+    config_json = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self) -> str:
@@ -40,11 +49,33 @@ class Run(Base):
 
     agent = relationship("Agent", lazy="joined")
     recipe = relationship("Recipe", lazy="joined")
+    evidence = relationship(
+        "Evidence",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="Evidence.id",
+    )
 
     def __repr__(self) -> str:
         return f"<Run id={self.id} agent_id={self.agent_id} recipe_id={self.recipe_id} status={self.status!r}>"
 
 Index("ix_runs_status_created", Run.status, Run.created_at.desc())
+
+
+class Evidence(Base):
+    __tablename__ = "evidence"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(64), nullable=False, default="json")
+    label = Column(String(255), nullable=True)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    run = relationship("Run", back_populates="evidence")
+
+    def __repr__(self) -> str:
+        return f"<Evidence id={self.id} run_id={self.run_id} kind={self.kind!r}>"
 
 class Tool(Base):
     __tablename__ = "tools"
@@ -95,4 +126,5 @@ __all__ = [
     "Tool",
     "ChatThread",
     "ChatMessage",
+    "Evidence",
 ]
