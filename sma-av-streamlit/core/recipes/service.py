@@ -68,9 +68,13 @@ def load_recipe_dict(source: Union[dict, str, Path, Any]) -> dict:
     # Path-like or string path
     if yaml_text is None and isinstance(source, (str, Path)):
         p = Path(str(source))
-        if p.exists():
-            yaml_text = _read_text_from_path(p)
-
+        candidate_paths = [p]
+        if not p.is_absolute():
+            candidate_paths.append(RECIPES_DIR / p)
+        for candidate in candidate_paths:
+            if candidate.exists():
+                yaml_text = _read_text_from_path(candidate)
+                break
     # If still None and it's a string, treat as YAML text
     if yaml_text is None and isinstance(source, str):
         if (":" in source) or ("\n" in source):
