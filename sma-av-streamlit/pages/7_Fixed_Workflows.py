@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from core.db.models import Base, Agent, Recipe
 from core.db.session import get_session
 from core.workflow.orchestrator import run_ipav_pipeline
+from core.recipes.bundle_store import list_bundles
 
 PAGE_KEY = "FixedWorkflows"
 st.title("🧩 Fixed Agent Orchestrator")
@@ -129,3 +130,23 @@ if run_btn and a and r:
             st.error("Pipeline execution failed.")
             with st.expander("Run error (details)"):
                 st.exception(e)
+
+st.divider()
+
+st.subheader("Saved Bundles from /sop")
+bundles = list_bundles()
+
+if not bundles:
+    st.info("No bundles recorded yet. Use /sop in Chat to generate orchestrator bundles.")
+else:
+    for bundle in bundles:
+        label = bundle.display_name or bundle.bundle_id
+        with st.expander(label, expanded=False):
+            st.write(f"**Orchestrator recipe:** `{bundle.orchestrator_path}`")
+            if bundle.fixed_agents:
+                st.write("**Fixed agents:**")
+                for agent_name, path in bundle.fixed_agents.items():
+                    st.write(f"- {agent_name}: `{path}`")
+            if bundle.context_hints:
+                st.caption(f"Context hints: `{bundle.context_hints}`")
+            st.caption(f"Recorded {bundle.created_at}")

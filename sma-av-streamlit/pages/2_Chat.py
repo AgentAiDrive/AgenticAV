@@ -235,12 +235,22 @@ def _render_bundle_for_sop(cmd: SlashCommand, orchestrator_name: str) -> None:
     try:
         sop_text = cmd.body or (cmd.raw.split("\n", 1)[1] if "\n" in cmd.raw else cmd.raw)
         ctx = {"name": orchestrator_name or "Workflow_From_SOP"}
-        artifacts = compile_sop_to_bundle(sop_text, ctx)
+        artifacts, metadata = compile_sop_to_bundle(sop_text, ctx)
         with st.expander("Generated Orchestrator & Fixed-Agent Recipes (bundle)", expanded=False):
-            st.success("Created orchestrator and fixed-agent recipes from SOP.")
-            for k, p in artifacts.items():
-                st.write(f"**{k}** → `{p}`")
-        st.caption("Tip: Attach the orchestrator recipe to a workflow or run it from the Dashboard.")
+            st.success(
+                "Created orchestrator and fixed-agent recipes from SOP. "
+                "This bundle is now available on the 🧩 Fixed Workflows page."
+            )
+            st.write(f"**Orchestrator** → `{artifacts['orchestrator']}`")
+            for agent, path in artifacts.items():
+                if agent == "orchestrator":
+                    continue
+                st.write(f"**{agent}** → `{path}`")
+            if metadata.context_hints:
+                st.caption(f"Context hints: `{metadata.context_hints}`")
+        st.caption(
+            "Tip: Attach the orchestrator recipe to a workflow or run it from the Dashboard."
+        )
     except Exception as e:
         st.warning(f"Bundle generation skipped: {type(e).__name__}: {e}")
 

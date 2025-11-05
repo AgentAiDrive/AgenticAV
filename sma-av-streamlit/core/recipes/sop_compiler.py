@@ -1,22 +1,22 @@
 from __future__ import annotations
 from typing import Dict, Any, Tuple
 from pathlib import Path
-import yaml
 from .schema import OrchestratorRecipe, FixedAgentRecipe, MCPBinding, ToolMethod, Step
 from .storage import save_yaml
 from core.agents.fixed.registry import FIXED_AGENTS
+from .bundle_store import BundleMetadata, record_bundle_metadata
 
 def _tool_binding_from_call(call: str) -> Tuple[str, str]:
     # "qsys_api.load_snapshot" -> ("qsys_api","load_snapshot")
     tool, method = call.split(".", 1)
     return tool, method
 
-def compile_sop_to_bundle(sop_text: str, ctx: Dict[str, Any]) -> Dict[str, Path]:
+def compile_sop_to_bundle(sop_text: str, ctx: Dict[str, Any]) -> Tuple[Dict[str, Path], BundleMetadata]:
     """
     1) Parse SOP (LLM or rule-based) to produce an OrchestratorRecipe (steps_by_agent).
     2) From orchestrator recipe, derive bounded FixedAgentRecipe for each agent mentioned.
     3) Persist orchestrator.yaml and fixed recipes under data/recipes/.
-    Returns dict of artifact paths.
+    Returns the written artifact paths and stored bundle metadata.
     """
     # --- Step 1: Convert SOP prose to a draft orchestrator model (LLM-backed or heuristics).
     orch = _sop_to_orchestrator_model(sop_text, ctx)
@@ -60,7 +60,13 @@ def compile_sop_to_bundle(sop_text: str, ctx: Dict[str, Any]) -> Dict[str, Path]
     for agent, rec in fixed_recipes.items():
         p = save_yaml(rec, subdir="recipes/fixed", filename=f"{slugify(orch.name)}__{agent}.yaml")
         out[agent] = p
-    return out
+    metadata = record_bundle_metadata(
+        name=orch.name,
+        ctx=ctx,
+        orchestrator_path=orch_path,
+        fixed_agent_paths={agent: path for agent, path in out.items() if agent != "orchestrator"},
+    )
+    return out, metadata
 
 # ---- helpers ---------------------------------------------------------------
 

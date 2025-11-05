@@ -38,4 +38,19 @@ streamlit run sma-av-streamlit/app.py --server.port 8501
 
 Open http://localhost:8501 in your browser. Follow the steps described in the runbook to seed the database, create agents, author recipes and test connectors.
 
-For development, use core/mcp/scaffold.py to generate new connectors and ensure the template functions are defined. 
+For development, use core/mcp/scaffold.py to generate new connectors and ensure the template functions are defined.
+
+### Bundle metadata storage
+
+Orchestrator/fixed-agent bundles generated via the `/sop` flow are recorded in
+`data/recipes/bundles/index.json`. Each entry stores:
+
+- `bundle_id`: slug derived from the orchestrator name.
+- `display_name`: user-facing label shown on the 🧩 Fixed Workflows page.
+- `orchestrator_path`: relative path to the orchestrator recipe YAML.
+- `fixed_agents`: mapping of agent name → recipe YAML path.
+- `context_hints`: optional JSON object with extra context captured during bundle creation.
+- `created_at`: UTC timestamp when the bundle metadata was recorded.
+
+This index powers the Fixed Workflows browser and can be reused for future
+import/export tooling.
