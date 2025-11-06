@@ -1,152 +1,347 @@
 # sma-av-streamlit/pages/7_Fixed_Workflows.py
 from __future__ import annotations
 
-import json
-import streamlit as st
-from datetime import datetime  # noqa: F401 (kept if you log timestamps)
-from sqlalchemy.exc import SQLAlchemyError
+"""
+Fixed Workflows UI
+- Loads persisted bundle metadata
+- Renders each bundle as a "card" with context JSON selection/editor
+- Per-card actions: Run, Export, Edit (swap YAMLs / update context hints), Delete
+- Sidebar: Import (.zip), Export ALL bundles (.zip-of-zips)
+- Legacy ad-hoc run form preserved at bottom
+"""
 
-from core.db.models import Base, Agent, Recipe
-from core.db.session import get_session
-from core.workflow.orchestrator import run_ipav_pipeline
-from core.recipes.bundle_store import list_bundles
+import io
+import json
+from pathlib import Path
+from typing import Any, Dict, List
+
+import streamlit as st
+
+# --- Core imports (present per the completed tasks) ---
+from core.orchestrator.runner import run_orchestrated_workflow
+from core.recipes.bundle_store import (
+    list_bundles,
+    get_bundle,
+    update_bundle,
+    delete_bundle,
+)
+
+# Import tool: prefer core.io.port.import_zip; fall back to a "not available" stub
+try:
+    from core.io.port import import_zip as _import_zip  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    _import_zip = None  # type: ignore[assignment]
+
+# Export tool: prefer core.io.port.export_zip; if missing, we’ll build the zip manually
+try:
+    from core.io.port import export_zip as _export_zip  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    _export_zip = None  # type: ignore[assignment]
 
 PAGE_KEY = "FixedWorkflows"
-st.title("🧩 Fixed Agent Orchestrator")
+st.set_page_config(page_title="Fixed Workflows", page_icon="🧩", layout="wide")
+st.title("🧩 Fixed Workflows — Orchestrator + Fixed Agents")
+
+# Where recipes usually land; adjust if your project sets a different base
+RECIPES_BASE = Path("data/recipes")
 
 
-def _safe_init_db_once():
-    """Initialize DB exactly once per Streamlit session.
+# -------------------- Helpers -------------------- #
+def _load_json_candidates(near: Path) -> List[Path]:
+    """Return a small list of nearby JSON files that could serve as context."""
+    candidates: List[Path] = []
+    roots = {near.parent, RECIPES_BASE, RECIPES_BASE / "contexts"}
+    for root in roots:
+        if root and root.exists():
+            candidates.extend(p for p in root.glob("*.json") if p.is_file())
+    # de-dup
+    seen: set[str] = set()
+    uniq: List[Path] = []
+    for p in candidates:
+        sp = str(p.resolve())
+        if sp not in seen:
+            uniq.append(p)
+            seen.add(sp)
+    return uniq[:50]
 
-    Strategy:
-      1) Try the project's real seeder (core.db.seed.init_db)
-      2) If unavailable, create tables directly from SQLAlchemy models
+
+def _safe_parse_json(s: str) -> Dict[str, Any]:
+    try:
+        o = json.loads(s) if s.strip() else {}
+        return o if isinstance(o, dict) else {}
+    except Exception:
+        return {}
+
+
+def _export_bundle_zip_bytes(bundle_id: str) -> bytes:
     """
-    if st.session_state.get("_db_init_done"):
-        return
+    Export the bundle as a single .zip:
+      - manifests orchestrator + fixed-agent YAMLs
+      - writes recipes.json manifest (name -> yaml)
+    Prefer core.io.port.export_zip if available; otherwise build zip here.
+    """
+    md = get_bundle(bundle_id)
+    if md is None:
+        raise RuntimeError("Bundle not found")
 
-    # Try real seeder (if available)
-    real_seeder_err = None
-    try:
-        from core.db.seed import init_db as real_init_db  # type: ignore
-    except Exception as e:  # noqa: BLE001
-        real_seeder_err = e
-        real_init_db = None  # type: ignore
+    # If project exposes a general export_zip tool, delegate to it
+    if _export_zip is not None:
+        # Gather files
+        paths = []
+        op = Path(md.orchestrator_path)
+        if op.exists():
+            paths.append(op)
+        for p in (md.fixed_agents or {}).values():
+            pp = Path(p)
+            if pp.exists():
+                paths.append(pp)
+        return _export_zip(paths)  # type: ignore[misc]
 
-    try:
-        if real_init_db:
-            real_init_db()
-        else:
-            # Fallback: create tables directly from models
-            with get_session() as s:
-                bind = s.get_bind()
-                Base.metadata.create_all(bind=bind)
+    # Manual zip as a safe fallback
+    import zipfile
 
-        st.session_state["_db_init_done"] = True
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        manifest: List[dict] = []
 
-        if real_seeder_err is not None:
-            st.info(
-                "DB seeding module not available; created tables from models instead. "
-                "If you expect sample data, run your project's seeding command."
+        # Orchestrator
+        orch_path = Path(md.orchestrator_path)
+        if orch_path.exists():
+            y = orch_path.read_text(encoding="utf-8")
+            z.writestr(f"recipes/{orch_path.name}", y)
+            manifest.append({"name": orch_path.stem, "yaml": f"recipes/{orch_path.name}"})
+
+        # Fixed agents
+        for agent_name, p in (md.fixed_agents or {}).items():
+            pp = Path(p)
+            if not pp.exists():
+                continue
+            y = pp.read_text(encoding="utf-8")
+            z.writestr(f"recipes/{pp.name}", y)
+            manifest.append(
+                {
+                    "name": pp.stem,
+                    "yaml": f"recipes/{pp.name}",
+                    "meta": {"agent": agent_name},
+                }
             )
 
-    except Exception as err:  # noqa: BLE001
-        st.session_state["_db_init_done"] = False
-        st.error("Database initialization failed. Running in limited mode.")
-        with st.expander("DB init error (details)"):
-            if real_seeder_err:
-                st.write("Seeder import error:")
-                st.exception(real_seeder_err)
-            st.write("Initialization error:")
-            st.exception(err)
+        z.writestr("recipes.json", json.dumps(manifest, indent=2))
+
+    return buf.getvalue()
 
 
-# Initialize (once)
-_safe_init_db_once()
+# -------------------- Sidebar: Import / Export ALL -------------------- #
+with st.sidebar:
+    st.subheader("Import / Export")
 
-# ---- Load selectable options (guarded) ----
-agent_opts: dict[int, str] = {}
-recipe_opts: dict[int, str] = {}
-
-try:
-    with get_session() as db:
-        agents = db.query(Agent).order_by(Agent.name).all()
-        recipes = db.query(Recipe).order_by(Recipe.name).all()
-        agent_opts = {a.id: a.name for a in agents}
-        recipe_opts = {r.id: r.name for r in recipes}
-except SQLAlchemyError as e:
-    st.error("Failed to query the database. See details below.")
-    with st.expander("DB query error"):
-        st.exception(e)
-
-if not agent_opts or not recipe_opts:
-    st.warning(
-        "No Agents or Recipes found. Create them first (or run your project's seeding step) "
-        "then return to this page."
+    uploaded = st.file_uploader(
+        "Import a Fixed Workflow bundle (.zip)",
+        type=["zip"],
+        key=f"{PAGE_KEY}:import",
     )
 
-st.subheader("Run Orchestrator")
-
-a = (
-    st.selectbox(
-        "Orchestrator Agent",
-        options=list(agent_opts.keys()),
-        format_func=lambda i: agent_opts[i],
+    merge_policy = st.selectbox(
+        "On name conflicts",
+        options=["skip", "rename", "overwrite"],
+        index=0,
+        key=f"{PAGE_KEY}:merge",
+        help="Policy to apply when imported YAML names already exist.",
     )
-    if agent_opts
-    else None
-)
-r = (
-    st.selectbox(
-        "Recipe",
-        options=list(recipe_opts.keys()),
-        format_func=lambda i: recipe_opts[i],
-    )
-    if recipe_opts
-    else None
-)
 
-ctx = st.text_area("Context (JSON)", value="{}")
-run_btn = st.button("Run pipeline", type="primary", disabled=not (a and r))
-
-if run_btn and a and r:
-    try:
-        ctx_obj = json.loads(ctx) if ctx.strip() else {}
-    except Exception as e:  # noqa: BLE001
-        st.error(f"Context JSON error: {e}")
-        ctx_obj = {}
-
-    with st.spinner("Running IPAV pipeline..."):
-        try:
-            with get_session() as db2:
-                run = run_ipav_pipeline(
-                    db2,
-                    agent_id=int(a),
-                    recipe_id=int(r),
-                    context=ctx_obj,
+    if st.button("Import", use_container_width=True, disabled=(uploaded is None)):
+        if _import_zip is None:
+            st.error("Import not available: core.io.port.import_zip was not found.")
+        else:
+            try:
+                payload = uploaded.read() if uploaded else b""
+                # core.io.port.import_zip should return a summary dict; pass merge hint if supported
+                report = _import_zip(payload, merge=merge_policy)  # type: ignore[misc]
+                st.success(
+                    f"Imported: {report}"
+                    if isinstance(report, str)
+                    else f"Imported bundle(s). Summary: {report}"
                 )
-            st.success(f"Run #{getattr(run, 'id', '?')} completed.")
-        except Exception as e:  # noqa: BLE001
-            st.error("Pipeline execution failed.")
-            with st.expander("Run error (details)"):
-                st.exception(e)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Import failed: {e!r}")
 
-st.divider()
+    if st.button("Export ALL bundles", use_container_width=True):
+        import zipfile
 
-st.subheader("Saved Bundles from /sop")
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as rootz:
+            for md in list_bundles():
+                try:
+                    blob = _export_bundle_zip_bytes(md.bundle_id)
+                    rootz.writestr(f"{md.bundle_id}.zip", blob)
+                except Exception as ee:
+                    rootz.writestr(
+                        f"{md.bundle_id}.error.txt", f"{type(ee).__name__}: {ee}"
+                    )
+        st.download_button(
+            "Download all bundles (.zip)",
+            data=out.getvalue(),
+            file_name="fixed-workflows-bundles.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+# -------------------- Main: Cards -------------------- #
 bundles = list_bundles()
-
 if not bundles:
-    st.info("No bundles recorded yet. Use /sop in Chat to generate orchestrator bundles.")
+    st.info("No bundles yet. Generate one from **Chat → /sop** to persist bundles here.")
 else:
-    for bundle in bundles:
-        label = bundle.display_name or bundle.bundle_id
-        with st.expander(label, expanded=False):
-            st.write(f"**Orchestrator recipe:** `{bundle.orchestrator_path}`")
-            if bundle.fixed_agents:
-                st.write("**Fixed agents:**")
-                for agent_name, path in bundle.fixed_agents.items():
-                    st.write(f"- {agent_name}: `{path}`")
-            if bundle.context_hints:
-                st.caption(f"Context hints: `{bundle.context_hints}`")
-            st.caption(f"Recorded {bundle.created_at}")
+    for md in bundles:
+        with st.container(border=True):
+            st.markdown(f"### {md.display_name or md.bundle_id}")
+            st.caption(
+                f"Bundle ID: `{md.bundle_id}` • Orchestrator: `{md.orchestrator_path}`"
+            )
+
+            if md.fixed_agents:
+                with st.expander("Fixed Agents", expanded=False):
+                    for aname, apath in md.fixed_agents.items():
+                        st.write(f"- **{aname}** → `{apath}`")
+
+            if md.context_hints:
+                st.caption(f"Context hints: `{md.context_hints}`")
+
+            colA, colB, colC, colD = st.columns([1.3, 1, 1, 1])
+
+            # --- A) Context editor/loader --- #
+            with colA:
+                st.subheader("Context")
+                ctx_key = f"{PAGE_KEY}:ctx:{md.bundle_id}"
+                default_ctx_str = json.dumps(md.context_hints or {}, indent=2)
+                ctx_text = st.text_area(
+                    "Inline JSON",
+                    value=default_ctx_str,
+                    key=ctx_key,
+                    height=160,
+                    label_visibility="collapsed",
+                )
+                ctx_obj = _safe_parse_json(ctx_text)
+
+                candidates = _load_json_candidates(Path(md.orchestrator_path))
+                if candidates:
+                    pick = st.selectbox(
+                        "…or load from JSON file",
+                        options=["(none)"] + [str(p) for p in candidates],
+                        index=0,
+                        key=f"{ctx_key}:pick",
+                    )
+                    if pick != "(none)":
+                        try:
+                            ctx_obj = json.loads(
+                                Path(pick).read_text(encoding="utf-8")
+                            )
+                            st.success("Loaded context from file.")
+                        except Exception as e:
+                            st.warning(f"Failed to load context: {e}")
+
+            # --- B) Run + Export --- #
+            with colB:
+                st.subheader("Run")
+                if st.button(
+                    "▶️ Run bundle",
+                    key=f"{PAGE_KEY}:run:{md.bundle_id}",
+                    use_container_width=True,
+                ):
+                    try:
+                        result = run_orchestrated_workflow(
+                            Path(md.orchestrator_path), context=ctx_obj
+                        )
+                        st.success("Run complete.")
+                        st.json(result)
+                    except Exception as e:
+                        st.error(f"Run failed: {e}")
+
+                try:
+                    bbytes = _export_bundle_zip_bytes(md.bundle_id)
+                    st.download_button(
+                        "⬇️ Export bundle",
+                        data=bbytes,
+                        file_name=f"{md.bundle_id}.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key=f"{PAGE_KEY}:dl:{md.bundle_id}",
+                    )
+                except Exception as e:
+                    st.warning(f"Export not available: {e}")
+
+            # --- C) Edit (swap YAMLs / update context) --- #
+            with colC:
+                st.subheader("Edit")
+                yaml_opts = sorted([str(p) for p in RECIPES_BASE.rglob("*.yaml")])
+
+                new_orch = st.selectbox(
+                    "Orchestrator YAML",
+                    options=[md.orchestrator_path]
+                    + [p for p in yaml_opts if p != md.orchestrator_path],
+                    key=f"{PAGE_KEY}:orch:{md.bundle_id}",
+                )
+
+                new_fixed = dict(md.fixed_agents or {})
+                for aname, apath in (md.fixed_agents or {}).items():
+                    new_fixed[aname] = st.selectbox(
+                        f"{aname} YAML",
+                        options=[apath] + [p for p in yaml_opts if p != apath],
+                        key=f"{PAGE_KEY}:fa:{md.bundle_id}:{aname}",
+                    )
+
+                if st.button(
+                    "Save changes",
+                    use_container_width=True,
+                    key=f"{PAGE_KEY}:save:{md.bundle_id}",
+                ):
+                    try:
+                        update_bundle(
+                            md.bundle_id,
+                            orchestrator_path=new_orch,
+                            fixed_agents=new_fixed,
+                            context_hints=ctx_obj,
+                        )
+                        st.success("Bundle updated.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Update failed: {e}")
+
+            # --- D) Delete --- #
+            with colD:
+                st.subheader("Danger zone")
+                if st.button(
+                    "🗑️ Delete bundle",
+                    type="secondary",
+                    use_container_width=True,
+                    key=f"{PAGE_KEY}:del:{md.bundle_id}",
+                ):
+                    ok = delete_bundle(md.bundle_id, remove_files=True)
+                    if ok:
+                        st.success("Bundle deleted.")
+                        st.rerun()
+                    else:
+                        st.warning("Bundle not found.")
+
+# -------------------- Legacy Ad-Hoc Run (kept for back-compat) -------------------- #
+st.divider()
+with st.expander("Legacy Ad-Hoc Run (back-compat)", expanded=False):
+    st.caption(
+        "Run an orchestrator YAML directly with a one-off context JSON."
+    )
+    orch_file = st.text_input(
+        "Path to orchestrator.yaml",
+        value="",
+        placeholder="data/recipes/.../orchestrator.yaml",
+    )
+    ctx_text = st.text_area("Context JSON", value="{}", height=120)
+    if st.button("Run (legacy)"):
+        try:
+            result = run_orchestrated_workflow(
+                Path(orch_file), context=_safe_parse_json(ctx_text)
+            )
+            st.success("Run complete.")
+            st.json(result)
+        except Exception as e:
+            st.error(f"{type(e).__name__}: {e}")
+
