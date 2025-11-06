@@ -15,6 +15,10 @@ from sqlalchemy.exc import SQLAlchemyError  # noqa: F401 (reserved for future de
 from core.db.session import get_session
 from core.db.models import Base, Agent, Recipe
 
+PAGE_KEY = "Setup Wizard"
+show_tip(PAGE_KEY)
+
+st.title("🏁 Setup Wizard")
 
 # ---------- robust seeding (no import-time failures) ----------
 def seed_demo_safe():
@@ -381,10 +385,7 @@ def validate(payload: dict):
 
 
 # ---------- page header ----------
-PAGE_KEY = "Setup Wizard"
-show_tip(PAGE_KEY)
 
-st.title("🏁 Setup Wizard")
 st.write("→ → **Click Button** to Initialize the database, seed demo agents, tools, and recipes.")
 
 if st.button("Initialize database & seed demo data"):
