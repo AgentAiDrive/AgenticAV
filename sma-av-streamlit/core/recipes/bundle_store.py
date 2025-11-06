@@ -1,13 +1,15 @@
-# sma-av-streamlit/core/recipes/bundle_store.py
 from __future__ import annotations
 
 """
 Bundle store for Fixed Workflows.
 - JSON-backed index under data/bundles/index.json
 - Minimal dataclass model + CRUD helpers
+- Flexible record_bundle: accepts a BundleMetadata OR keyword args (incl. legacy 'name')
 """
 
 import json
+import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -77,10 +79,18 @@ def _save_index(index: Dict[str, Any]) -> None:
     INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
 
 
-# -------------------- API -------------------- #
-def record_bundle(md: BundleMetadata) -> BundleMetadata:
-    """Insert (or upsert by bundle_id) a bundle entry."""
-    index = _load_index()
+# -------------------- Utils -------------------- #
+def _slug(s: Optional[str]) -> str:
+    if not s:
+        return "bundle"
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "bundle"
+
+
+def _gen_bundle_id(display_name: Optional[str]) -> str:
+    return f"{_slug(display_name)}-{uuid.uuid4().hex[:8]}"
+
+
+def _upsert(index: Dict[str, Any], md: BundleMetadata) -> BundleMetadata:
     bundles: List[Dict[str, Any]] = index.get("bundles", [])
     for i, raw in enumerate(bundles):
         if raw.get("bundle_id") == md.bundle_id:
@@ -94,15 +104,70 @@ def record_bundle(md: BundleMetadata) -> BundleMetadata:
     return md
 
 
+# -------------------- API -------------------- #
+def record_bundle(
+    md_or: Optional[BundleMetadata] = None,
+    /,
+    **kwargs: Any,
+) -> BundleMetadata:
+    """
+    Flexible entry point to record (upsert) a bundle.
+
+    Usage A (object):
+        record_bundle(BundleMetadata(...))
+
+    Usage B (kwargs):
+        record_bundle(
+            name="My SOP bundle",                # alias for display_name
+            orchestrator_path="data/recipes/.../orchestrator.yaml",
+            fixed_agents={"kb": "data/recipes/.../fixed_kb.yaml"},
+            context_hints={"topic": "Zoom Rooms"}
+            # optional: bundle_id="my-sop-1234"
+            # optional: context=... (alias for context_hints)
+            # optional: fixed_agent_paths=... (alias for fixed_agents)
+            # optional: display_name=... (canonical)
+        )
+    """
+    index = _load_index()
+
+    # Case A: caller provided a dataclass
+    if isinstance(md_or, BundleMetadata):
+        return _upsert(index, md_or)
+
+    # Case B: kwargs normalization
+    display_name = kwargs.get("display_name") or kwargs.get("name")
+    orchestrator_path = kwargs.get("orchestrator_path")
+    if not orchestrator_path:
+        raise ValueError("record_bundle: 'orchestrator_path' is required")
+
+    bundle_id = kwargs.get("bundle_id") or _gen_bundle_id(display_name)
+    fixed_agents = kwargs.get("fixed_agents") or kwargs.get("fixed_agent_paths") or {}
+    context_hints = kwargs.get("context_hints") or kwargs.get("context") or {}
+
+    md = BundleMetadata(
+        bundle_id=bundle_id,
+        display_name=display_name,
+        orchestrator_path=str(orchestrator_path),
+        fixed_agents=dict(fixed_agents or {}),
+        context_hints=dict(context_hints or {}),
+    )
+    return _upsert(index, md)
+
+
+def record_bundle_metadata(md: BundleMetadata) -> BundleMetadata:
+    """
+    Back-compat alias: some older modules import record_bundle_metadata(md).
+    """
+    return record_bundle(md)
+
+
 def list_bundles() -> List[BundleMetadata]:
-    """Return metadata for all stored bundles."""
     index = _load_index()
     bundles: Iterable[Dict[str, Any]] = index.get("bundles", [])
     return [BundleMetadata.from_dict(item) for item in bundles]
 
 
 def get_bundle(bundle_id: str) -> Optional[BundleMetadata]:
-    """Fetch a single bundle by id."""
     for b in list_bundles():
         if b.bundle_id == bundle_id:
             return b
@@ -117,7 +182,6 @@ def update_bundle(
     fixed_agents: Optional[Dict[str, str]] = None,
     context_hints: Optional[Dict[str, Any]] = None,
 ) -> Optional[BundleMetadata]:
-    """Update fields on a bundle entry and save. Returns updated entry or None if not found."""
     index = _load_index()
     bundles: List[Dict[str, Any]] = index.get("bundles", [])
     for i, raw in enumerate(bundles):
@@ -153,19 +217,18 @@ def delete_bundle(bundle_id: str, *, remove_files: bool = True) -> bool:
             keep.append(raw)
             continue
 
+    # remove files if requested
         deleted = True
         if remove_files:
             try:
-                from pathlib import Path as _P  # local alias
-                orch = _P(raw.get("orchestrator_path", ""))
+                orch = Path(raw.get("orchestrator_path", ""))
                 if orch.is_file():
                     orch.unlink(missing_ok=True)
             except Exception:
                 pass
-
             for p in (raw.get("fixed_agents") or {}).values():
                 try:
-                    pp = _P(p)
+                    pp = Path(p)
                     if pp.is_file():
                         pp.unlink(missing_ok=True)
                 except Exception:
@@ -176,8 +239,3 @@ def delete_bundle(bundle_id: str, *, remove_files: bool = True) -> bool:
         _save_index(index)
 
     return deleted
-
-# --- Back-compat alias for older callers ---
-def record_bundle_metadata(md: BundleMetadata) -> BundleMetadata:
-    """Compatibility shim: older code imports record_bundle_metadata."""
-    return record_bundle(md)
