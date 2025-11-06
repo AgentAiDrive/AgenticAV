@@ -1,20 +1,26 @@
 from __future__ import annotations
+
 from typing import Dict, Any, Tuple
 from pathlib import Path
+
 from .schema import OrchestratorRecipe, FixedAgentRecipe, MCPBinding, ToolMethod, Step
 from .storage import save_yaml
 from core.agents.fixed.registry import FIXED_AGENTS
+
+# Robust import for bundle recording (new + legacy)
 try:
     from .bundle_store import BundleMetadata, record_bundle  # new name
     record_bundle_metadata = record_bundle                  # alias for local use
-except ImportError:
+except Exception:
     # legacy environments where the old name still exists
-    from .bundle_store import BundleMetadata, record_bundle_metadata
+    from .bundle_store import BundleMetadata, record_bundle_metadata  # type: ignore
+
 
 def _tool_binding_from_call(call: str) -> Tuple[str, str]:
     # "qsys_api.load_snapshot" -> ("qsys_api","load_snapshot")
     tool, method = call.split(".", 1)
     return tool, method
+
 
 def compile_sop_to_bundle(sop_text: str, ctx: Dict[str, Any]) -> Tuple[Dict[str, Path], BundleMetadata]:
     """
@@ -35,15 +41,16 @@ def compile_sop_to_bundle(sop_text: str, ctx: Dict[str, Any]) -> Tuple[Dict[str,
 
         for s in steps:
             fixed_steps.append(s)
-            if s.call and s.kind in ("call","verify"):
+            if s.call and s.kind in ("call", "verify"):
                 tool, method = _tool_binding_from_call(s.call) if "." in s.call else (s.call, "")
                 if tool not in tool_methods:
                     tool_methods[tool] = {}
                 # conservative default risk; approvals from step
-                risk = "medium" if s.approvals else "low"
+                risk = "medium" if getattr(s, "approvals", None) else "low"
                 tool_methods[tool][method or ""] = ToolMethod(
-                    name=method or s.call, risk=risk,
-                    approval=s.approvals[0] if s.approvals else None,
+                    name=method or s.call,
+                    risk=risk,
+                    approval=(s.approvals[0] if getattr(s, "approvals", None) else None),
                 )
 
         mcp = [MCPBinding(tool=t, allow=list(methods.values())) for t, methods in tool_methods.items()]
@@ -51,10 +58,10 @@ def compile_sop_to_bundle(sop_text: str, ctx: Dict[str, Any]) -> Tuple[Dict[str,
             agent_name=agent_name,
             version=orch.version,
             scope={"profiles": orch.profiles},
-            policy_tags=["orchestrated","ipavl"],
+            policy_tags=["orchestrated", "ipavl"],
             mcp=mcp,
             steps=fixed_steps,
-            outcomes={"success": "verify_all_pass", "failure": "halt_and_escalate"}
+            outcomes={"success": "verify_all_pass", "failure": "halt_and_escalate"},
         )
         fixed_recipes[agent_name] = fixed
 
@@ -65,13 +72,16 @@ def compile_sop_to_bundle(sop_text: str, ctx: Dict[str, Any]) -> Tuple[Dict[str,
     for agent, rec in fixed_recipes.items():
         p = save_yaml(rec, subdir="recipes/fixed", filename=f"{slugify(orch.name)}__{agent}.yaml")
         out[agent] = p
+
+    # Persist bundle metadata (kwargs form) — only strings enter the store
     metadata = record_bundle_metadata(
         name=orch.name,
+        orchestrator_path=str(orch_path),
+        fixed_agent_paths={agent: str(path) for agent, path in out.items() if agent != "orchestrator"},
         ctx=ctx,
-        orchestrator_path=orch_path,
-        fixed_agent_paths={agent: path for agent, path in out.items() if agent != "orchestrator"},
     )
     return out, metadata
+
 
 # ---- helpers ---------------------------------------------------------------
 
@@ -83,29 +93,40 @@ def _sop_to_orchestrator_model(sop_text: str, ctx: Dict[str, Any]) -> Orchestrat
     # toy heuristic example; replace with your current `from_sop` logic wired to schema
     name = ctx.get("name") or "Workflow_From_SOP"
     steps_by_agent = {
-        "BaselineAgent": [Step(id="policy_window", kind="call", call="policy_check", args={"windows":["06:00-22:00"]})],
-        "EventFormAgent": [Step(id="normalize_form", kind="call", call="parse_form", args={"schema":"event-intake-v2"})],
+        "BaselineAgent": [
+            Step(id="policy_window", kind="call", call="policy_check", args={"windows": ["06:00-22:00"]})
+        ],
+        "EventFormAgent": [
+            Step(id="normalize_form", kind="call", call="parse_form", args={"schema": "event-intake-v2"})
+        ],
         "IntakeAgent": [
-            Step(id="read_zoom", kind="call", call="zoom_admin.get_room_health", args={"room":"$room"}, evidence=["json:zoom"]),
-            Step(id="qsys_rx", kind="call", call="qsys_api.component_state", args={"room":"$room","component":"HDMI_RX_1"})
+            Step(id="read_zoom", kind="call", call="zoom_admin.get_room_health", args={"room": "$room"}, evidence=["json:zoom"]),
+            Step(id="qsys_rx", kind="call", call="qsys_api.component_state", args={"room": "$room", "component": "HDMI_RX_1"})
         ],
-        "PlanAgent": [Step(id="choose_triage", kind="call", call="choose_recipe", args={"candidate":"Support_Triage"})],
-        "ActAgent": [Step(id="reload_edid", kind="call", call="qsys_api.load_snapshot", args={"room":"$room","snapshot":"HDMI_EDID_Reload"}, approvals=["Support_L2"])],
+        "PlanAgent": [
+            Step(id="choose_triage", kind="call", call="choose_recipe", args={"candidate": "Support_Triage"})
+        ],
+        "ActAgent": [
+            Step(id="reload_edid", kind="call", call="qsys_api.load_snapshot", args={"room": "$room", "snapshot": "HDMI_EDID_Reload"}, approvals=["Support_L2"])
+        ],
         "VerifyAgent": [
-            Step(id="lock_check", kind="verify", call="assert", args={"hdmi_signal_lock":{"room":"$room","input":"RX1","expect":True}}),
-            Step(id="snap", kind="call", call="collect_evidence", args={"target":"MatrixStatus"})
+            Step(id="lock_check", kind="verify", call="assert", args={"hdmi_signal_lock": {"room": "$room", "input": "RX1", "expect": True}}),
+            Step(id="snap", kind="call", call="collect_evidence", args={"target": "MatrixStatus"})
         ],
-        "LearnAgent": [Step(id="kb_pub", kind="call", call="kb_publish", args={"template":"HDMI-Lock-Recovery","tags":["HDMI","EDID","QSYS"]})]
+        "LearnAgent": [
+            Step(id="kb_pub", kind="call", call="kb_publish", args={"template": "HDMI-Lock-Recovery", "tags": ["HDMI", "EDID", "QSYS"]})
+        ]
     }
     return OrchestratorRecipe(
         name=name,
         description="Derived from SOP",
         agents=[a for a in FIXED_AGENTS if a in steps_by_agent] + [k for k in steps_by_agent if k not in FIXED_AGENTS],
-        mcp_required=["zoom_admin","qsys_api","dante_ctrl"],
+        mcp_required=["zoom_admin", "qsys_api", "dante_ctrl"],
         profiles={"room_selector": "B12-Conf-*"},
         steps_by_agent=steps_by_agent,
         approvals={"ActAgent": ["Support_L2"]},
     )
+
 
 def slugify(s: str) -> str:
     return "".join(c.lower() if c.isalnum() else "-" for c in s).strip("-")
