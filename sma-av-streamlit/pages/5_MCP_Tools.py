@@ -14,6 +14,7 @@ from core.ui.page_tips import show as show_tip
 PAGE_KEY = "MCP Tools"
 show_tip(PAGE_KEY)
 
+st.set_page_config(page_title="🧰 MCP Tools", page_icon="🧰", layout="wide")
 st.title("🧰 MCP Tools")
 tools_dir = Path(os.getcwd()) / "core" / "mcp" / "tools"
 tools_dir.mkdir(parents=True, exist_ok=True)
