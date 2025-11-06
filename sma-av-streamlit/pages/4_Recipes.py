@@ -31,7 +31,6 @@ from core.io.port import import_zip  # reuses your existing import/merge logic
 PAGE_KEY = "Recipes"  # identifies this page in the page tips helper
 show_tip(PAGE_KEY)
 
-st.set_page_config(page_icon="📜", layout="wide")
 st.title("📜 Recipes")
 
 # --- Recipes Toolbar: Drag-and-drop YAML import --------------------------------
