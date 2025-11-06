@@ -4,7 +4,12 @@ from pathlib import Path
 from .schema import OrchestratorRecipe, FixedAgentRecipe, MCPBinding, ToolMethod, Step
 from .storage import save_yaml
 from core.agents.fixed.registry import FIXED_AGENTS
-from .bundle_store import BundleMetadata, record_bundle_metadata
+try:
+    from .bundle_store import BundleMetadata, record_bundle  # new name
+    record_bundle_metadata = record_bundle                  # alias for local use
+except ImportError:
+    # legacy environments where the old name still exists
+    from .bundle_store import BundleMetadata, record_bundle_metadata
 
 def _tool_binding_from_call(call: str) -> Tuple[str, str]:
     # "qsys_api.load_snapshot" -> ("qsys_api","load_snapshot")
