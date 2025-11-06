@@ -176,3 +176,8 @@ def delete_bundle(bundle_id: str, *, remove_files: bool = True) -> bool:
         _save_index(index)
 
     return deleted
+
+# --- Back-compat alias for older callers ---
+def record_bundle_metadata(md: BundleMetadata) -> BundleMetadata:
+    """Compatibility shim: older code imports record_bundle_metadata."""
+    return record_bundle(md)
