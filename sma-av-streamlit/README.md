@@ -54,3 +54,41 @@ Orchestrator/fixed-agent bundles generated via the `/sop` flow are recorded in
 
 This index powers the Fixed Workflows browser and can be reused for future
 import/export tooling.
+
+--- a/sma-av-streamlit/README.md
++++ b/sma-av-streamlit/README.md
+@@
++## Page ↔ Core Module Map
++> Quick navigation for contributors. Paths are relative to `sma-av-streamlit/`.
++
++| UI Page (Streamlit) | Purpose | Primary Modules (logic & data) |
++|---|---|---|
++| `app.py` (Home) | Logo, Runbook viewer, global tips | `core/ui/page_tips.py`, `RUNBOOK.md` |
++| `pages/1_Setup_Wizard.py` | One-click seed/init (DB, demo data) | `core/db/seed.py`, `core/db/models.py`, `core/db/session.py`, `data/`, `recipes/`, `core/recipes/service.py`, `core/recipes/validator.py`, `core/mcp/scaffold.py` |
++| `pages/2_Chat.py` | Chat + slash commands (`/sop`, JSON mode) | `core/chat/service.py`, `core/utils/slash_commands.py`, `core/llm/client.py`, `core/llm/llm_provider.py`, `core/llm/providers/openai_client.py`, `core/llm/providers/anthropic_client.py`, `core/recipes/from_sop.py` |
++| `pages/3_Agents.py` | Agent catalog & CRUD; attach recipes; trigger runs | `core/agents/fixed/registry.py`, `core/agents/kb_publisher.py`, `core/recipes/attach.py`, `core/recipes/service.py`, `core/policies/default-guardrails.json` |
++| `pages/4_Recipes.py` | Orchestrator & Fixed-Agent recipes (validate/version) | `core/recipes/schema.py`, `core/recipes/validator.py`, `core/recipes/storage.py`, `core/recipes/service.py`, `core/recipes/sop_compiler.py` |
++| `pages/5_MCP_Tools.py` | Discover/scaffold MCP tools; health checks | `core/mcp/scaffold.py`, `core/mcp/from_sop_tools.py`, `core/mcp/tools/**` |
++| `pages/6_Settings.py` | Model/provider selection; keys | `core/llm/llm_provider.py`, `core/llm/client.py` |
++| `pages/7_Workflows.py` | Orchestrated workflows (manual/cron) | `core/workflow/orchestrator.py`, `core/workflow/engine.py`, `core/workflow/service.py`, `core/orchestrator/runner.py`, `workflows/*.json` |
++| `pages/7_Fixed_Workflows.py` | Fixed-workflow pipeline (bundle → run) | `core/recipes/bundle_store.py`, `core/recipes/sop_compiler.py`, `core/workflow/service.py`, `data/recipes/fixed/**` |
++| `pages/8_Dashboard.py` | KPIs & run metrics; drilldowns | `core/db/models.py` (Run/Step), `core/utils/evidence.py`, `core/orchestrator/runner.py` |
++| `pages/9_Help.py` | Help & quick links | `core/ui/page_tips.py` |
++| `pages/Run_Detail.py` | Single run detail (via `?run_id=`) | `core/orchestrator/runner.py`, `core/utils/evidence.py`, `core/db/models.py` |
++
++### Key Integrations
++- **ServiceNow KB:** `core/tools/servicenow.py` (expects `SERVICENOW_BASE_URL`, optional `SERVICENOW_BOT_TOKEN`), used by KB publish flows.
++- **Recipes & Data:** authoring in `recipes/**` (project-level) and seeds in `data/recipes/**` (fixed/orchestrator templates).
++- **MCP Tools:** sample packs in `core/mcp/tools/**` (e.g., `incident_ticketing/` with `manifest.json` + `connector.py`).
++
++### How it flows (at a glance)
++**`/sop` in Chat → runnable workflow**
++`pages/2_Chat.py` → `core/utils/slash_commands.py` → `core/recipes/from_sop.py` → `core/recipes/sop_compiler.py` → (optional) `core/mcp/scaffold.py` → `core/workflow/orchestrator.py` → `core/orchestrator/runner.py`
++
++**KB publish (ServiceNow)**
++Agent/recipe step → `core/agents/kb_publisher.py` → `core/tools/servicenow.py` (`/api/now/table/kb_knowledge`) → evidence stored via `core/utils/evidence.py`
++
++### Developer tips
++- **DB & Seeds:** Start in `pages/1_Setup_Wizard.py` to create the demo DB and load example agents/recipes.
++- **Validating Recipes:** Use `core/recipes/validator.py` (same logic the UI calls) during CI.
++- **Run Details:** Open `pages/Run_Detail.py?run_id=<id>` to inspect steps, artifacts, and evidence.
