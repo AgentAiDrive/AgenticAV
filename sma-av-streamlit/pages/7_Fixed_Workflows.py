@@ -27,23 +27,21 @@ from core.recipes.bundle_store import (
     delete_bundle,
 )
 
-# Import tool: prefer core.io.port.import_zip; fall back to a "not available" stub
+# Import tool: prefer core.io.port.import_zip; fall back gracefully
 try:
     from core.io.port import import_zip as _import_zip  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover
     _import_zip = None  # type: ignore[assignment]
 
-# Export tool: prefer core.io.port.export_zip; if missing, we’ll build the zip manually
+# Export tool: prefer core.io.port.export_zip; else manual zip
 try:
     from core.io.port import export_zip as _export_zip  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover
     _export_zip = None  # type: ignore[assignment]
 
 PAGE_KEY = "FixedWorkflows"
-st.set_page_config(page_title="Fixed Workflows", page_icon="🧩", layout="wide")
 st.title("🧩 Fixed Workflows — Orchestrator + Fixed Agents")
 
-# Where recipes usually land; adjust if your project sets a different base
 RECIPES_BASE = Path("data/recipes")
 
 # -------------------- Preset JSON Contexts (ServiceNow KB) -------------------- #
@@ -138,14 +136,19 @@ PRESET_CONTEXTS: Dict[str, Dict[str, Any]] = {
 }
 
 # -------------------- Helpers -------------------- #
+def _container_with_border():
+    """Streamlit <1.30 fallback for container(border=True)."""
+    try:
+        return st.container(border=True)
+    except TypeError:
+        return st.container()
+
 def _load_json_candidates(near: Path) -> List[Path]:
-    """Return a small list of nearby JSON files that could serve as context."""
     candidates: List[Path] = []
     roots = {near.parent, RECIPES_BASE, RECIPES_BASE / "contexts"}
     for root in roots:
         if root and root.exists():
             candidates.extend(p for p in root.glob("*.json") if p.is_file())
-    # de-dup
     seen: set[str] = set()
     uniq: List[Path] = []
     for p in candidates:
@@ -155,7 +158,6 @@ def _load_json_candidates(near: Path) -> List[Path]:
             seen.add(sp)
     return uniq[:50]
 
-
 def _safe_parse_json(s: str) -> Dict[str, Any]:
     try:
         o = json.loads(s) if s.strip() else {}
@@ -163,21 +165,12 @@ def _safe_parse_json(s: str) -> Dict[str, Any]:
     except Exception:
         return {}
 
-
 def _export_bundle_zip_bytes(bundle_id: str) -> bytes:
-    """
-    Export the bundle as a single .zip:
-      - manifests orchestrator + fixed-agent YAMLs
-      - writes recipes.json manifest (name -> yaml)
-    Prefer core.io.port.export_zip if available; otherwise build zip here.
-    """
     md = get_bundle(bundle_id)
     if md is None:
         raise RuntimeError("Bundle not found")
 
-    # If project exposes a general export_zip tool, delegate to it
     if _export_zip is not None:
-        # Gather files
         paths = []
         op = Path(md.orchestrator_path)
         if op.exists():
@@ -188,74 +181,43 @@ def _export_bundle_zip_bytes(bundle_id: str) -> bytes:
                 paths.append(pp)
         return _export_zip(paths)  # type: ignore[misc]
 
-    # Manual zip as a safe fallback
     import zipfile
-
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
         manifest: List[dict] = []
-
-        # Orchestrator
         orch_path = Path(md.orchestrator_path)
         if orch_path.exists():
             y = orch_path.read_text(encoding="utf-8")
             z.writestr(f"recipes/{orch_path.name}", y)
             manifest.append({"name": orch_path.stem, "yaml": f"recipes/{orch_path.name}"})
-
-        # Fixed agents
         for agent_name, p in (md.fixed_agents or {}).items():
             pp = Path(p)
             if not pp.exists():
                 continue
             y = pp.read_text(encoding="utf-8")
             z.writestr(f"recipes/{pp.name}", y)
-            manifest.append(
-                {"name": pp.stem, "yaml": f"recipes/{pp.name}", "meta": {"agent": agent_name}}
-            )
-
+            manifest.append({"name": pp.stem, "yaml": f"recipes/{pp.name}", "meta": {"agent": agent_name}})
         z.writestr("recipes.json", json.dumps(manifest, indent=2))
-
     return buf.getvalue()
-
 
 # -------------------- Sidebar: Import / Export ALL -------------------- #
 with st.sidebar:
     st.subheader("Import / Export")
-
-    uploaded = st.file_uploader(
-        "Import a Fixed Workflow bundle (.zip)",
-        type=["zip"],
-        key=f"{PAGE_KEY}:import",
-    )
-
-    merge_policy = st.selectbox(
-        "On name conflicts",
-        options=["skip", "rename", "overwrite"],
-        index=0,
-        key=f"{PAGE_KEY}:merge",
-        help="Policy to apply when imported YAML names already exist.",
-    )
-
+    uploaded = st.file_uploader("Import a Fixed Workflow bundle (.zip)", type=["zip"], key=f"{PAGE_KEY}:import")
+    merge_policy = st.selectbox("On name conflicts", options=["skip", "rename", "overwrite"], index=0, key=f"{PAGE_KEY}:merge", help="Policy to apply when imported YAML names already exist.")
     if st.button("Import", use_container_width=True, disabled=(uploaded is None)):
         if _import_zip is None:
             st.error("Import not available: core.io.port.import_zip was not found.")
         else:
             try:
                 payload = uploaded.read() if uploaded else b""
-                # core.io.port.import_zip should return a summary dict; pass merge hint if supported
                 report = _import_zip(payload, merge=merge_policy)  # type: ignore[misc]
-                st.success(
-                    f"Imported: {report}"
-                    if isinstance(report, str)
-                    else f"Imported bundle(s). Summary: {report}"
-                )
+                st.success(f"Imported: {report}" if isinstance(report, str) else f"Imported bundle(s). Summary: {report}")
                 st.rerun()
             except Exception as e:
                 st.error(f"Import failed: {e!r}")
-
     if st.button("Export ALL bundles", use_container_width=True):
         import zipfile
-
         out = io.BytesIO()
         with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as rootz:
             for md in list_bundles():
@@ -264,13 +226,7 @@ with st.sidebar:
                     rootz.writestr(f"{md.bundle_id}.zip", blob)
                 except Exception as ee:
                     rootz.writestr(f"{md.bundle_id}.error.txt", f"{type(ee).__name__}: {ee}")
-        st.download_button(
-            "Download all bundles (.zip)",
-            data=out.getvalue(),
-            file_name="fixed-workflows-bundles.zip",
-            mime="application/zip",
-            use_container_width=True,
-        )
+        st.download_button("Download all bundles (.zip)", data=out.getvalue(), file_name="fixed-workflows-bundles.zip", mime="application/zip", use_container_width=True)
 
 # -------------------- Main: Cards -------------------- #
 bundles = list_bundles()
@@ -278,7 +234,7 @@ if not bundles:
     st.info("No bundles yet. Generate one from **Chat → /sop** to persist bundles here.")
 else:
     for md in bundles:
-        with st.container(border=True):
+        with _container_with_border():
             st.markdown(f"### {md.display_name or md.bundle_id}")
             st.caption(f"Bundle ID: `{md.bundle_id}` • Orchestrator: `{md.orchestrator_path}`")
 
@@ -295,54 +251,29 @@ else:
             # --- A) Context editor/loader + PRESETS --- #
             with colA:
                 st.subheader("Context")
-
-                # Keep per-bundle session state for the editor so presets/files can overwrite it
                 ctx_text_key = f"{PAGE_KEY}:ctx_text:{md.bundle_id}"
                 if ctx_text_key not in st.session_state:
                     st.session_state[ctx_text_key] = json.dumps(md.context_hints or {}, indent=2)
 
-                # Preset selector
                 preset_key = f"{PAGE_KEY}:preset:{md.bundle_id}"
-                preset_choice = st.selectbox(
-                    "Preset",
-                    options=["(none)"] + list(PRESET_CONTEXTS.keys()),
-                    index=0,
-                    key=preset_key,
-                    help="Choose a sample to populate the JSON editor.",
-                )
+                preset_choice = st.selectbox("Preset", options=["(none)"] + list(PRESET_CONTEXTS.keys()), index=0, key=preset_key, help="Choose a sample to populate the JSON editor.")
                 if st.button("Load preset", key=f"{PAGE_KEY}:apply_preset:{md.bundle_id}", use_container_width=True):
                     if preset_choice != "(none)":
                         st.session_state[ctx_text_key] = json.dumps(PRESET_CONTEXTS[preset_choice], indent=2)
                         st.success(f"Loaded preset: {preset_choice}")
                         st.rerun()
 
-                # Nearby JSON candidates
                 candidates = _load_json_candidates(Path(md.orchestrator_path))
-                file_pick = st.selectbox(
-                    "…or load from JSON file",
-                    options=["(none)"] + [str(p) for p in candidates],
-                    index=0,
-                    key=f"{PAGE_KEY}:ctx_file:{md.bundle_id}",
-                )
+                file_pick = st.selectbox("…or load from JSON file", options=["(none)"] + [str(p) for p in candidates], index=0, key=f"{PAGE_KEY}:ctx_file:{md.bundle_id}")
                 if st.button("Load selected file", key=f"{PAGE_KEY}:apply_file:{md.bundle_id}", use_container_width=True, disabled=(file_pick == "(none)")):
                     try:
-                        st.session_state[ctx_text_key] = json.dumps(
-                            json.loads(Path(file_pick).read_text(encoding="utf-8")),
-                            indent=2
-                        )
+                        st.session_state[ctx_text_key] = json.dumps(json.loads(Path(file_pick).read_text(encoding="utf-8")), indent=2)
                         st.success("Loaded context from file.")
                         st.rerun()
                     except Exception as e:
                         st.warning(f"Failed to load context: {e}")
 
-                # Editor (bound to session state)
-                st.text_area(
-                    "Inline JSON",
-                    value=st.session_state[ctx_text_key],
-                    key=ctx_text_key,
-                    height=200,
-                    label_visibility="collapsed",
-                )
+                st.text_area("Inline JSON", value=st.session_state[ctx_text_key], key=ctx_text_key, height=200, label_visibility="collapsed")
                 ctx_obj = _safe_parse_json(st.session_state[ctx_text_key])
 
             # --- B) Run + Export --- #
@@ -355,17 +286,9 @@ else:
                         st.json(result)
                     except Exception as e:
                         st.error(f"Run failed: {e}")
-
                 try:
                     bbytes = _export_bundle_zip_bytes(md.bundle_id)
-                    st.download_button(
-                        "⬇️ Export bundle",
-                        data=bbytes,
-                        file_name=f"{md.bundle_id}.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        key=f"{PAGE_KEY}:dl:{md.bundle_id}",
-                    )
+                    st.download_button("⬇️ Export bundle", data=bbytes, file_name=f"{md.bundle_id}.zip", mime="application/zip", use_container_width=True, key=f"{PAGE_KEY}:dl:{md.bundle_id}")
                 except Exception as e:
                     st.warning(f"Export not available: {e}")
 
@@ -373,21 +296,10 @@ else:
             with colC:
                 st.subheader("Edit")
                 yaml_opts = sorted([str(p) for p in RECIPES_BASE.rglob("*.yaml")])
-
-                new_orch = st.selectbox(
-                    "Orchestrator YAML",
-                    options=[md.orchestrator_path] + [p for p in yaml_opts if p != md.orchestrator_path],
-                    key=f"{PAGE_KEY}:orch:{md.bundle_id}",
-                )
-
+                new_orch = st.selectbox("Orchestrator YAML", options=[md.orchestrator_path] + [p for p in yaml_opts if p != md.orchestrator_path], key=f"{PAGE_KEY}:orch:{md.bundle_id}")
                 new_fixed = dict(md.fixed_agents or {})
                 for aname, apath in (md.fixed_agents or {}).items():
-                    new_fixed[aname] = st.selectbox(
-                        f"{aname} YAML",
-                        options=[apath] + [p for p in yaml_opts if p != apath],
-                        key=f"{PAGE_KEY}:fa:{md.bundle_id}:{aname}",
-                    )
-
+                    new_fixed[aname] = st.selectbox(f"{aname} YAML", options=[apath] + [p for p in yaml_opts if p != apath], key=f"{PAGE_KEY}:fa:{md.bundle_id}:{aname}")
                 if st.button("Save changes", use_container_width=True, key=f"{PAGE_KEY}:save:{md.bundle_id}"):
                     try:
                         update_bundle(md.bundle_id, orchestrator_path=new_orch, fixed_agents=new_fixed, context_hints=ctx_obj)
