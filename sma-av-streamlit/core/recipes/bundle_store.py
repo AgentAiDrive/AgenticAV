@@ -1,124 +1,178 @@
-"""Helpers for persisting and loading compiled SOP bundles.
-
-A "bundle" groups a single orchestrator recipe with any fixed-agent
-recipes generated alongside it.  Metadata is persisted to a JSON index so the
-Fixed Workflows page can discover newly created bundles.
-"""
+# sma-av-streamlit/core/recipes/bundle_store.py
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from datetime import datetime
+"""
+Bundle store for Fixed Workflows.
+- JSON-backed index under data/bundles/index.json
+- Minimal dataclass model + CRUD helpers
+"""
+
 import json
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from .storage import BASE
+DATA_DIR = Path("data/bundles")
+INDEX_PATH = DATA_DIR / "index.json"
 
 
-def _slugify(value: str) -> str:
-    return "".join(c.lower() if c.isalnum() else "-" for c in value).strip("-")
-
-
-BUNDLE_DIR = BASE / "recipes" / "bundles"
-INDEX_PATH = BUNDLE_DIR / "index.json"
-
-
+# -------------------- Model -------------------- #
 @dataclass
 class BundleMetadata:
-    """Structured view of a stored bundle entry."""
-
     bundle_id: str
-    display_name: str
     orchestrator_path: str
-    fixed_agents: Dict[str, str]
-    context_hints: Optional[Dict[str, Any]]
-    created_at: str
-
-    @classmethod
-    def from_dict(cls, payload: Dict[str, Any]) -> "BundleMetadata":
-        return cls(
-            bundle_id=payload.get("bundle_id", ""),
-            display_name=payload.get("display_name", ""),
-            orchestrator_path=payload.get("orchestrator_path", ""),
-            fixed_agents=dict(payload.get("fixed_agents", {})),
-            context_hints=payload.get("context_hints") or None,
-            created_at=payload.get("created_at", ""),
-        )
+    display_name: Optional[str] = None
+    fixed_agents: Dict[str, str] = field(default_factory=dict)
+    context_hints: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(
+        default_factory=lambda: datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    )
 
     def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        if self.context_hints is None:
-            data["context_hints"] = None
-        return data
+        return {
+            "bundle_id": self.bundle_id,
+            "display_name": self.display_name,
+            "orchestrator_path": self.orchestrator_path,
+            "fixed_agents": dict(self.fixed_agents or {}),
+            "context_hints": dict(self.context_hints or {}),
+            "created_at": self.created_at,
+        }
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "BundleMetadata":
+        return BundleMetadata(
+            bundle_id=d.get("bundle_id") or d.get("id") or "",
+            display_name=d.get("display_name"),
+            orchestrator_path=d.get("orchestrator_path") or "",
+            fixed_agents=d.get("fixed_agents") or {},
+            context_hints=d.get("context_hints") or {},
+            created_at=d.get("created_at")
+            or datetime.utcnow().isoformat(timespec="seconds")
+            + "Z",
+        )
+
+
+# -------------------- Storage -------------------- #
+def _ensure_dirs() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_index() -> Dict[str, Any]:
-    if INDEX_PATH.exists():
-        try:
-            with INDEX_PATH.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if isinstance(payload, dict) and "bundles" in payload:
-                return payload
-        except json.JSONDecodeError:
-            # Fall through to reset the index if it's corrupted.
-            pass
-    return {"bundles": []}
+    _ensure_dirs()
+    if not INDEX_PATH.exists():
+        return {"bundles": []}
+    try:
+        raw = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {"bundles": []}
+        raw.setdefault("bundles", [])
+        return raw
+    except Exception:
+        return {"bundles": []}
 
 
 def _save_index(index: Dict[str, Any]) -> None:
-    BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
-    with INDEX_PATH.open("w", encoding="utf-8") as handle:
-        json.dump(index, handle, indent=2, ensure_ascii=False)
+    _ensure_dirs()
+    INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
 
 
-def record_bundle_metadata(
-    name: str,
-    ctx: Dict[str, Any],
-    orchestrator_path: Path,
-    fixed_agent_paths: Dict[str, Path],
-) -> BundleMetadata:
-    """Insert or update bundle metadata in the JSON index."""
-
-    bundle_id = _slugify(name or "workflow-from-sop")
-    display_name = ctx.get("display_name") or name
-
-    # Strip known keys so we store only contextual hints.
-    excluded = {"name", "display_name"}
-    hints = ctx.get("context") or {
-        k: v for k, v in ctx.items() if k not in excluded and v not in (None, "")
-    }
-    context_hints: Optional[Dict[str, Any]] = hints or None
-
-    metadata = BundleMetadata(
-        bundle_id=bundle_id,
-        display_name=display_name,
-        orchestrator_path=str(orchestrator_path),
-        fixed_agents={agent: str(path) for agent, path in fixed_agent_paths.items()},
-        context_hints=context_hints,
-        created_at=datetime.utcnow().isoformat(timespec="seconds") + "Z",
-    )
-
+# -------------------- API -------------------- #
+def record_bundle(md: BundleMetadata) -> BundleMetadata:
+    """Insert (or upsert by bundle_id) a bundle entry."""
     index = _load_index()
-    bundles: List[Dict[str, Any]] = list(index.get("bundles", []))
-
-    existing_idx = next(
-        (i for i, entry in enumerate(bundles) if entry.get("bundle_id") == bundle_id),
-        None,
-    )
-    if existing_idx is None:
-        bundles.append(metadata.to_dict())
-    else:
-        bundles[existing_idx] = metadata.to_dict()
-
+    bundles: List[Dict[str, Any]] = index.get("bundles", [])
+    for i, raw in enumerate(bundles):
+        if raw.get("bundle_id") == md.bundle_id:
+            bundles[i] = md.to_dict()
+            index["bundles"] = bundles
+            _save_index(index)
+            return md
+    bundles.append(md.to_dict())
     index["bundles"] = bundles
     _save_index(index)
-
-    return metadata
+    return md
 
 
 def list_bundles() -> List[BundleMetadata]:
     """Return metadata for all stored bundles."""
-
     index = _load_index()
     bundles: Iterable[Dict[str, Any]] = index.get("bundles", [])
     return [BundleMetadata.from_dict(item) for item in bundles]
+
+
+def get_bundle(bundle_id: str) -> Optional[BundleMetadata]:
+    """Fetch a single bundle by id."""
+    for b in list_bundles():
+        if b.bundle_id == bundle_id:
+            return b
+    return None
+
+
+def update_bundle(
+    bundle_id: str,
+    *,
+    display_name: Optional[str] = None,
+    orchestrator_path: Optional[str] = None,
+    fixed_agents: Optional[Dict[str, str]] = None,
+    context_hints: Optional[Dict[str, Any]] = None,
+) -> Optional[BundleMetadata]:
+    """Update fields on a bundle entry and save. Returns updated entry or None if not found."""
+    index = _load_index()
+    bundles: List[Dict[str, Any]] = index.get("bundles", [])
+    for i, raw in enumerate(bundles):
+        if raw.get("bundle_id") == bundle_id:
+            md = BundleMetadata.from_dict(raw)
+            if display_name is not None:
+                md.display_name = display_name
+            if orchestrator_path is not None:
+                md.orchestrator_path = orchestrator_path
+            if fixed_agents is not None:
+                md.fixed_agents = fixed_agents
+            if context_hints is not None:
+                md.context_hints = context_hints
+            bundles[i] = md.to_dict()
+            index["bundles"] = bundles
+            _save_index(index)
+            return md
+    return None
+
+
+def delete_bundle(bundle_id: str, *, remove_files: bool = True) -> bool:
+    """
+    Delete a bundle from the index, optionally removing referenced YAML files.
+    Returns True if deleted, False if not found.
+    """
+    index = _load_index()
+    bundles: List[Dict[str, Any]] = index.get("bundles", [])
+    keep: List[Dict[str, Any]] = []
+    deleted = False
+
+    for raw in bundles:
+        if raw.get("bundle_id") != bundle_id:
+            keep.append(raw)
+            continue
+
+        deleted = True
+        if remove_files:
+            try:
+                from pathlib import Path as _P  # local alias
+                orch = _P(raw.get("orchestrator_path", ""))
+                if orch.is_file():
+                    orch.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            for p in (raw.get("fixed_agents") or {}).values():
+                try:
+                    pp = _P(p)
+                    if pp.is_file():
+                        pp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    if deleted:
+        index["bundles"] = keep
+        _save_index(index)
+
+    return deleted
