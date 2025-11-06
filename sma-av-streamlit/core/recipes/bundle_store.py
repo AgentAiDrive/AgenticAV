@@ -5,6 +5,7 @@ Bundle store for Fixed Workflows.
 - JSON-backed index under data/bundles/index.json
 - Minimal dataclass model + CRUD helpers
 - Flexible record_bundle: accepts a BundleMetadata OR keyword args (incl. legacy 'name')
+- Path-safe: coerces Path/PathLike to str; json dumps with default=str
 """
 
 import json
@@ -14,9 +15,37 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from os import PathLike
 
 DATA_DIR = Path("data/bundles")
 INDEX_PATH = DATA_DIR / "index.json"
+
+
+# -------------------- Utilities -------------------- #
+def _stringify_paths(obj: Any) -> Any:
+    """Recursively convert Path/PathLike within mappings/sequences to str."""
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    if isinstance(obj, (Path, PathLike)):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _stringify_paths(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        t = type(obj)
+        return t(_stringify_paths(v) for v in obj)
+    if isinstance(obj, set):
+        return sorted(_stringify_paths(v) for v in obj)
+    return obj
+
+
+def _slug(s: Optional[str]) -> str:
+    if not s:
+        return "bundle"
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "bundle"
+
+
+def _gen_bundle_id(display_name: Optional[str]) -> str:
+    return f"{_slug(display_name)}-{uuid.uuid4().hex[:8]}"
 
 
 # -------------------- Model -------------------- #
@@ -35,9 +64,9 @@ class BundleMetadata:
         return {
             "bundle_id": self.bundle_id,
             "display_name": self.display_name,
-            "orchestrator_path": self.orchestrator_path,
-            "fixed_agents": dict(self.fixed_agents or {}),
-            "context_hints": dict(self.context_hints or {}),
+            "orchestrator_path": str(self.orchestrator_path),
+            "fixed_agents": {k: str(v) for k, v in (self.fixed_agents or {}).items()},
+            "context_hints": _stringify_paths(self.context_hints or {}),
             "created_at": self.created_at,
         }
 
@@ -46,12 +75,11 @@ class BundleMetadata:
         return BundleMetadata(
             bundle_id=d.get("bundle_id") or d.get("id") or "",
             display_name=d.get("display_name"),
-            orchestrator_path=d.get("orchestrator_path") or "",
-            fixed_agents=d.get("fixed_agents") or {},
+            orchestrator_path=str(d.get("orchestrator_path") or ""),
+            fixed_agents={k: str(v) for k, v in (d.get("fixed_agents") or {}).items()},
             context_hints=d.get("context_hints") or {},
             created_at=d.get("created_at")
-            or datetime.utcnow().isoformat(timespec="seconds")
-            + "Z",
+            or datetime.utcnow().isoformat(timespec="seconds") + "Z",
         )
 
 
@@ -76,18 +104,7 @@ def _load_index() -> Dict[str, Any]:
 
 def _save_index(index: Dict[str, Any]) -> None:
     _ensure_dirs()
-    INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
-
-
-# -------------------- Utils -------------------- #
-def _slug(s: Optional[str]) -> str:
-    if not s:
-        return "bundle"
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "bundle"
-
-
-def _gen_bundle_id(display_name: Optional[str]) -> str:
-    return f"{_slug(display_name)}-{uuid.uuid4().hex[:8]}"
+    INDEX_PATH.write_text(json.dumps(index, indent=2, default=str), encoding="utf-8")
 
 
 def _upsert(index: Dict[str, Any], md: BundleMetadata) -> BundleMetadata:
@@ -120,17 +137,15 @@ def record_bundle(
         record_bundle(
             name="My SOP bundle",                # alias for display_name
             orchestrator_path="data/recipes/.../orchestrator.yaml",
-            fixed_agents={"kb": "data/recipes/.../fixed_kb.yaml"},
-            context_hints={"topic": "Zoom Rooms"}
+            fixed_agents={"kb": "data/recipes/.../fixed_kb.yaml"},  # or fixed_agent_paths=...
+            context_hints={"topic": "Zoom Rooms"}                   # or ctx=... / context=...
             # optional: bundle_id="my-sop-1234"
-            # optional: context=... (alias for context_hints)
-            # optional: fixed_agent_paths=... (alias for fixed_agents)
-            # optional: display_name=... (canonical)
+            # optional: display_name="..."
         )
     """
     index = _load_index()
 
-    # Case A: caller provided a dataclass
+    # Case A: dataclass provided
     if isinstance(md_or, BundleMetadata):
         return _upsert(index, md_or)
 
@@ -141,23 +156,30 @@ def record_bundle(
         raise ValueError("record_bundle: 'orchestrator_path' is required")
 
     bundle_id = kwargs.get("bundle_id") or _gen_bundle_id(display_name)
-    fixed_agents = kwargs.get("fixed_agents") or kwargs.get("fixed_agent_paths") or {}
-    context_hints = kwargs.get("context_hints") or kwargs.get("context") or {}
+    fixed_agents = (
+        kwargs.get("fixed_agents")
+        or kwargs.get("fixed_agent_paths")
+        or {}
+    )
+    context_hints = (
+        kwargs.get("context_hints")
+        or kwargs.get("ctx")
+        or kwargs.get("context")
+        or {}
+    )
 
     md = BundleMetadata(
         bundle_id=bundle_id,
         display_name=display_name,
         orchestrator_path=str(orchestrator_path),
-        fixed_agents=dict(fixed_agents or {}),
-        context_hints=dict(context_hints or {}),
+        fixed_agents={k: str(v) for k, v in (fixed_agents or {}).items()},
+        context_hints=_stringify_paths(context_hints or {}),
     )
     return _upsert(index, md)
 
 
 def record_bundle_metadata(md: BundleMetadata) -> BundleMetadata:
-    """
-    Back-compat alias: some older modules import record_bundle_metadata(md).
-    """
+    """Back-compat alias: older code calls record_bundle_metadata(md)."""
     return record_bundle(md)
 
 
@@ -190,11 +212,11 @@ def update_bundle(
             if display_name is not None:
                 md.display_name = display_name
             if orchestrator_path is not None:
-                md.orchestrator_path = orchestrator_path
+                md.orchestrator_path = str(orchestrator_path)
             if fixed_agents is not None:
-                md.fixed_agents = fixed_agents
+                md.fixed_agents = {k: str(v) for k, v in fixed_agents.items()}
             if context_hints is not None:
-                md.context_hints = context_hints
+                md.context_hints = _stringify_paths(context_hints)
             bundles[i] = md.to_dict()
             index["bundles"] = bundles
             _save_index(index)
@@ -217,7 +239,7 @@ def delete_bundle(bundle_id: str, *, remove_files: bool = True) -> bool:
             keep.append(raw)
             continue
 
-    # remove files if requested
+        # match found
         deleted = True
         if remove_files:
             try:
