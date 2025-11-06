@@ -23,11 +23,11 @@ def _fetch_pil_image(url: str) -> Image.Image | None:
 _icon_img = _fetch_pil_image(ICON_URL)
 
 # ---------- Page config (must be first Streamlit command) ----------
-st.set_page_config(page_title="Agentic AV Ops", page_icon=_icon_img, layout="wide")
+st.set_page_config(page_title="🧩 Agentic AV Ops", page_icon=_icon_img, layout="wide")
 
 # ---------- Header ----------
 st.image(LOGO_URL, caption="", width=293)
-st.title("Agentic AV Ops - SOP Workflow Orchestration")
+st.title("🧩 Agentic AV Ops - SOP Workflow Orchestration")
 st.write("Use sidebar to navigate.")
 
 def model_light():
