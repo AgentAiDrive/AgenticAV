@@ -1,0 +1,34 @@
+{
+  "name": "KBPublisher",
+  "display_name": "KB Publisher (ServiceNow)",
+  "kind": "fixed",
+  "version": "1.0.0",
+  "capabilities": [
+    "compose_markdown",
+    "render_html",
+    "servicenow.kb.write"
+  ],
+  "policy": {
+    "risk": "high",
+    "rbac": [
+      "admin"
+    ],
+    "maintenance_tz": "America/Los_Angeles",
+    "maintenance_days": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "maintenance_start": "08:00",
+    "maintenance_end": "18:00"
+  },
+  "config": {
+    "servicenow_instance": "${https://dev274687.service-now.com/}",
+    "username": "${admin}",
+    "token": "${now_4f2gEnY070kemZajbCYVdr_Q89ANiliIRfNl4Thz--wW1xJAnrITFxAhQuM3uQmsqPVBJQGDnYuLIyZha_mrzA"},
+    "kb_knowledge_base": "${AV_knowledgebase}"
+  },
+  "notes": "Publishes a KB article to ServiceNow using app secrets / env."
+}
