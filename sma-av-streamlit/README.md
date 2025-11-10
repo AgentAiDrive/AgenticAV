@@ -23,72 +23,110 @@ https://agenticav.streamlit.app/
 **Local Development Tips**
 To run the application locally:
 
-**Clone the repository:**
-# Make sure IPAV-Agents branch selected
-git clone https://github.com/AgentAiDrive/AgenticAV/sma-av-streamlit.git
-cd AV-AIops
+Agentic AV Ops Application Features & Usage Guide
+Navigation
+🏁 Setup Wizard
+💬 Chat
+🤖 Agents
+📜 Recipes
+🧰 MCP Tools
+⚙️ Settings
+🧩 Workflows
+📊 Dashboard
+❓ Help & Runbook
+🔎 Run Details
+Tip: Streamlit organizes pages by file name; this runbook references the labels visible in the sidebar.
 
-Create a virtual environment and install dependencies:
-python3 -m venv venv
-source venv/bin/activate
-pip install -r sma-av-streamlit/requirements.txt
+Setup Wizard
+The Setup Wizard is designed for the initial configuration of the application. It allows you to initialize the database and load sample data (agents, tools, recipes, and workflows) for demonstration purposes. You can run the Setup Wizard multiple times to reset the demo content.
 
-**Run the app:**
-streamlit run sma-av-streamlit/app.py --server.port 8501
+How to Use the Setup Wizard:
 
-Open http://localhost:8501 in your browser. Follow the steps described in the runbook to seed the database, create agents, author recipes and test connectors.
+Open the “Setup Wizard” page from the sidebar (📝 icon).
+Click the button to initialize or reset the system data (e.g., “Initialize Database” or “Seed Demo Data”).
+After clicking, the app will create necessary database tables and insert default Agents, Recipes, Tools, and example Workflows. A confirmation message will appear once seeding is complete.
+You can then navigate to other pages (Agents, Recipes, Workflows, etc.) to view or modify the newly added sample data.
+Tip: The Setup Wizard can be safely run multiple times to revert to a clean demo state.
 
-For development, use core/mcp/scaffold.py to generate new connectors and ensure the template functions are defined.
+Settings
+The Settings page allows you to configure the AI model and other global settings for the app, including selecting a Large Language Model (LLM) provider (e.g., OpenAI or Anthropic). This setting is crucial for AI-related features like Chat and SOP generation.
 
-### Bundle metadata storage
+How to Use the Settings Page:
 
-Orchestrator/fixed-agent bundles generated via the `/sop` flow are recorded in
-`data/recipes/bundles/index.json`. Each entry stores:
+Navigate to the “Settings” page (⚙️ icon).
+Select the LLM Provider from the dropdown menu.
+Provide the required API Key for the selected provider, ensuring it is correctly set in the environment.
+Confirm the active model, which will be indicated on the page.
+(Optional) Enable Mock Tool Mode if you want to simulate external tool actions without real API calls.
+Changes made on the Settings page typically take effect immediately.
 
-- `bundle_id`: slug derived from the orchestrator name.
-- `display_name`: user-facing label shown on the 🧩 Fixed Workflows page.
-- `orchestrator_path`: relative path to the orchestrator recipe YAML.
-- `fixed_agents`: mapping of agent name → recipe YAML path.
-- `context_hints`: optional JSON object with extra context captured during bundle creation.
-- `created_at`: UTC timestamp when the bundle metadata was recorded.
+Note: Ensure the API key is correct and active to avoid errors in the Chat page.
 
-This index powers the Fixed Workflows browser and can be reused for future
-import/export tooling.
+Chat
+The Chat page (💬 Chat) offers an interactive interface to communicate with the AI model. You can ask questions or issue commands in natural language, and the AI assistant will respond. The chat supports slash commands that integrate with the IPAV workflow system.
 
---- a/sma-av-streamlit/README.md
-+++ b/sma-av-streamlit/README.md
-@@
-+## Page ↔ Core Module Map
-+> Quick navigation for contributors. Paths are relative to `sma-av-streamlit/`.
-+
-+| UI Page (Streamlit) | Purpose | Primary Modules (logic & data) |
-+|---|---|---|
-+| `app.py` (Home) | Logo, Runbook viewer, global tips | `core/ui/page_tips.py`, `RUNBOOK.md` |
-+| `pages/1_Setup_Wizard.py` | One-click seed/init (DB, demo data) | `core/db/seed.py`, `core/db/models.py`, `core/db/session.py`, `data/`, `recipes/`, `core/recipes/service.py`, `core/recipes/validator.py`, `core/mcp/scaffold.py` |
-+| `pages/2_Chat.py` | Chat + slash commands (`/sop`, JSON mode) | `core/chat/service.py`, `core/utils/slash_commands.py`, `core/llm/client.py`, `core/llm/llm_provider.py`, `core/llm/providers/openai_client.py`, `core/llm/providers/anthropic_client.py`, `core/recipes/from_sop.py` |
-+| `pages/3_Agents.py` | Agent catalog & CRUD; attach recipes; trigger runs | `core/agents/fixed/registry.py`, `core/agents/kb_publisher.py`, `core/recipes/attach.py`, `core/recipes/service.py`, `core/policies/default-guardrails.json` |
-+| `pages/4_Recipes.py` | Orchestrator & Fixed-Agent recipes (validate/version) | `core/recipes/schema.py`, `core/recipes/validator.py`, `core/recipes/storage.py`, `core/recipes/service.py`, `core/recipes/sop_compiler.py` |
-+| `pages/5_MCP_Tools.py` | Discover/scaffold MCP tools; health checks | `core/mcp/scaffold.py`, `core/mcp/from_sop_tools.py`, `core/mcp/tools/**` |
-+| `pages/6_Settings.py` | Model/provider selection; keys | `core/llm/llm_provider.py`, `core/llm/client.py` |
-+| `pages/7_Workflows.py` | Orchestrated workflows (manual/cron) | `core/workflow/orchestrator.py`, `core/workflow/engine.py`, `core/workflow/service.py`, `core/orchestrator/runner.py`, `workflows/*.json` |
-+| `pages/7_Fixed_Workflows.py` | Fixed-workflow pipeline (bundle → run) | `core/recipes/bundle_store.py`, `core/recipes/sop_compiler.py`, `core/workflow/service.py`, `data/recipes/fixed/**` |
-+| `pages/8_Dashboard.py` | KPIs & run metrics; drilldowns | `core/db/models.py` (Run/Step), `core/utils/evidence.py`, `core/orchestrator/runner.py` |
-+| `pages/9_Help.py` | Help & quick links | `core/ui/page_tips.py` |
-+| `pages/Run_Detail.py` | Single run detail (via `?run_id=`) | `core/orchestrator/runner.py`, `core/utils/evidence.py`, `core/db/models.py` |
-+
-+### Key Integrations
-+- **ServiceNow KB:** `core/tools/servicenow.py` (expects `SERVICENOW_BASE_URL`, optional `SERVICENOW_BOT_TOKEN`), used by KB publish flows.
-+- **Recipes & Data:** authoring in `recipes/**` (project-level) and seeds in `data/recipes/**` (fixed/orchestrator templates).
-+- **MCP Tools:** sample packs in `core/mcp/tools/**` (e.g., `incident_ticketing/` with `manifest.json` + `connector.py`).
-+
-+### How it flows (at a glance)
-+**`/sop` in Chat → runnable workflow**
-+`pages/2_Chat.py` → `core/utils/slash_commands.py` → `core/recipes/from_sop.py` → `core/recipes/sop_compiler.py` → (optional) `core/mcp/scaffold.py` → `core/workflow/orchestrator.py` → `core/orchestrator/runner.py`
-+
-+**KB publish (ServiceNow)**
-+Agent/recipe step → `core/agents/kb_publisher.py` → `core/tools/servicenow.py` (`/api/now/table/kb_knowledge`) → evidence stored via `core/utils/evidence.py`
-+
-+### Developer tips
-+- **DB & Seeds:** Start in `pages/1_Setup_Wizard.py` to create the demo DB and load example agents/recipes.
-+- **Validating Recipes:** Use `core/recipes/validator.py` (same logic the UI calls) during CI.
-+- **Run Details:** Open `pages/Run_Detail.py?run_id=<id>` to inspect steps, artifacts, and evidence.
+Key Capabilities:
+
+Conversational Q&A: Type messages to the AI, which acts as an “AV operations assistant.”
+History Display: View conversation history as chat bubbles.
+Slash Commands: Use commands starting with “/” to trigger specific actions (e.g., /sop, /recipe, /agent, /tool, /kb).
+Task Helper Sidebar: Access guidance on using slash commands and examples.
+Using the Chat Page:
+
+Go to the Chat page from the sidebar.
+Type a question or command in the text box labeled “Type your message…”.
+Press Enter to submit. The assistant will respond accordingly.
+Use slash commands for quick task execution.
+Agents
+The Agents page (🤖 Agents) is where you manage your AI agents, which represent personas or contexts under which recipes run.
+
+Using the Agents Page:
+
+Open the “Agents” page from the sidebar.
+Create a New Agent by entering a unique name and optional metadata.
+View existing agents and trigger runs with selected recipes.
+Edit or remove agents as needed.
+Example: To create a new agent named “DisplayAgent” for AV Support, fill in the details and click Create Agent.
+
+Recipes
+The Recipes page (📜 Recipes) allows you to create, edit, and manage procedural recipes that define the actions your agents will perform.
+
+Using the Recipes Page:
+
+Open the “Recipes” page from the sidebar.
+Create a New Recipe by entering a name and filling out the YAML structure.
+Validate the recipe and save it to the library.
+View or edit existing recipes as needed.
+Tip: Always validate after editing to catch YAML formatting errors.
+
+MCP Tools
+The MCP Tools page (🔌 MCP Tools) is dedicated to managing and testing external integrations (tools) that agents can use in their workflows.
+
+Using the MCP Tools Page:
+
+Open the “MCP Tools” page from the sidebar.
+Check the health of each tool and perform actions for testing or setup.
+Review tool responses for health checks and actions.
+Note: If mock mode is enabled, actions will return dummy success responses.
+
+Workflows
+The Workflows page (🧩 Workflows) allows you to orchestrate automated runs by combining an Agent with a Recipe on a specified trigger.
+
+Using the Workflows Page:
+
+Open the “Workflows” page from the sidebar.
+Create a New Workflow by filling in the required fields (name, agent, recipe, trigger).
+View and manage existing workflows, including running them manually or enabling/disabling them.
+Tip: Use the “Tick scheduler” button to manually trigger interval workflows.
+
+Dashboard
+The Dashboard page (📊 Dashboard) provides a comprehensive view of your system’s operations, aggregating data about workflow runs and agent activities.
+
+Using the Dashboard Page:
+
+Open the “Dashboard” page from the sidebar.
+Monitor KPIs, trends, and recent runs.
+Inspect run details by clicking on specific entries for breakdowns of each execution.
+Tip: Use the dashboard to identify issues and maintain system performance.
+
+This guide serves as a comprehensive overview of the Agentic AV Ops application, detailing how to navigate and utilize its features effectively.
