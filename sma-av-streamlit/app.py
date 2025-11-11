@@ -12,9 +12,6 @@ import requests
 from PIL import Image, UnidentifiedImageError
 import streamlit as st
 import sys
-# Ensure the directory that contains the "nav_pages" package is importable
-if str(APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(APP_ROOT))
 
 # ---------- Constants ----------
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
