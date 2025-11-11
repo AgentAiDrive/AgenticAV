@@ -245,17 +245,17 @@ except Exception as e:
 
     # file names (case-sensitive!)
     nav_map = {
-        "setupwizard": "setupwizard.py",
-        "chat": "chat.py",
-        "agents": "agents.py",
-        "recipes": "recipes.py",
-        "mcp_tools": "mcp_tools.py",
+        "setupwizard": "SetupWizard.py",
+        "chat": "Chat.py",
+        "agents": "Agents.py",
+        "recipes": "Recipes.py",
+        "mcp_tools": "MCP_Tools.py",
         "settings": "settings.py",
-        "workflows": "workflows.py",
-        "fixed_workflows": "fixed_workflows.py",
-        "dashboard": "dashboard.py",
-        "help": "help.py",
-        "run_detail": "run_detail.py",
+        "workflows": "Workflows.py",
+        "fixed_workflows": "Fixed_Workflows.py",
+        "dashboard": "Dashboard.py",
+        "help": "Help.py",
+        "run_detail": "Run_Detail.py",
     }
 
     def _fb_from(root: Path, key: str):
