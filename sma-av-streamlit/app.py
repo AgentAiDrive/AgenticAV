@@ -1,23 +1,22 @@
 # app.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 import re
 import runpy
-from functools import lru_cache
 from pathlib import Path
 from io import BytesIO
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 import requests
 from PIL import Image, UnidentifiedImageError
 import streamlit as st
-import sys
 
 # ---------- Constants ----------
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
 ICON_URL = "https://raw.githubusercontent.com/AgentAiDrive/AV-AIops/refs/heads/IPAV-Agents/sma-av-streamlit/ipav.ico"
 
-# ---------- Icon fetch (pure Python; no Streamlit calls) ----------
+# ---------- Cached icon fetch ----------
 def _fetch_pil_image(url: str) -> Optional[Image.Image]:
     try:
         r = requests.get(url, timeout=10)
@@ -28,13 +27,13 @@ def _fetch_pil_image(url: str) -> Optional[Image.Image]:
     except (requests.RequestException, UnidentifiedImageError, OSError):
         return None
 
-@lru_cache(maxsize=2)
+@st.cache_data(show_spinner=False)
 def _fetch_pil_image_cached(url: str) -> Optional[Image.Image]:
     return _fetch_pil_image(url)
 
 _icon_img = _fetch_pil_image_cached(ICON_URL) or "🛠️"
 
-# ---------- Page config (must be the first Streamlit command) ----------
+# ---------- Page config (must be first Streamlit command) ----------
 st.set_page_config(page_title="Agentic AV Ops", page_icon=_icon_img, layout="wide")
 
 # ---------- Repo paths ----------
@@ -48,18 +47,14 @@ def find_repo_root() -> Path:
 APP_ROOT = find_repo_root()
 CWD = Path.cwd()
 
-# ---------- Query params helpers (robust to new/old APIs) ----------
+# ---------- Query params helpers ----------
 def _get_query_params_dict() -> Dict[str, Any]:
-    """
-    Returns a simple dict of {str: str} for query params.
-    Works with both modern st.query_params and older experimental API.
-    """
+    """Return a simple dict {str: str} for query params (new/old API compatible)."""
     try:
-        qp = st.query_params  # modern: Mapping[str, str]
-        if hasattr(qp, "to_dict"):  # future-proof
+        qp = st.query_params
+        if hasattr(qp, "to_dict"):
             qp = qp.to_dict()
         if isinstance(qp, dict):
-            # Normalize values to strings
             norm = {}
             for k, v in qp.items():
                 if isinstance(v, list):
@@ -69,7 +64,6 @@ def _get_query_params_dict() -> Dict[str, Any]:
             return norm
         return dict(qp)
     except Exception:
-        # Legacy fallback
         qp_legacy = st.experimental_get_query_params()
         return {k: (v[0] if isinstance(v, list) and v else "") for k, v in qp_legacy.items()}
 
@@ -88,7 +82,6 @@ def home():
         p = st.session_state.get("llm_provider") or "OpenAI"
         dot = "🟢" if p == "OpenAI" else "🔵"
         st.sidebar.markdown(f"**Model**: {dot} {p}")
-
     model_light()
 
     # Try to import and run DB seed idempotently
@@ -215,95 +208,67 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
         st.caption(f"App root resolved to: `{APP_ROOT}`")
         st.caption(f"Working dir: `{CWD}`")
         st.code("\n".join(str(c) for c in candidates), language="text")
-# ---------- Navigation: import wrappers, with robust fallbacks ----------
 
+# ---------- Robust page discovery (works with your numbered pages/) ----------
+PAGES_DIRS = [APP_ROOT / "nav_pages", APP_ROOT / "pages"]
 
-def _wrap_script(path: Path):
-    """Return a render() that executes a standalone page script via runpy."""
+def _find_script_by_keywords(keywords: List[str]) -> Optional[Path]:
+    """
+    Find a .py file in nav_pages/ or pages/ whose filename contains ALL keywords
+    (case-insensitive). Handles numbered prefixes like '1_Setup_Wizard.py'.
+    """
+    kw = [k.lower() for k in keywords]
+    for root in PAGES_DIRS:
+        if not root.exists():
+            continue
+        for p in sorted(root.glob("*.py")):
+            name = p.name.lower()
+            if all(k in name for k in kw):
+                return p
+    return None
+
+def _renderer_for(keywords: List[str]) -> Callable[[], None]:
+    """
+    Return a render() that executes the discovered script via runpy.
+    If not found, render a user-friendly error.
+    """
+    target = _find_script_by_keywords(keywords)
     def _render():
-        runpy.run_path(str(path), run_name="__main__")
+        if target and target.exists():
+            runpy.run_path(str(target), run_name="__main__")
+        else:
+            st.error(f"Page script not found for keywords={keywords}. "
+                     f"Expected file in {', '.join(str(d) for d in PAGES_DIRS)}.")
     return _render
 
-# Try regular imports first (preferred when nav_pages is a package)
-try:
-    import nav_pages.SetupWizard as _pg_SetupWizard
-    import nav_pages.Chat as _pg_Chat
-    import nav_pages.Agents as _pg_Agents
-    import nav_pages.Recipes as _pg_Recipes
-    import nav_pages.MCP_Tools as _pg_MCP_Tools
-    import nav_pages.Settings as _pg_Settings
-    import nav_pages.Workflows as _pg_Workflows
-    import nav_pages.Fixed_Workflows as _pg_Fixed_Workflows
-    import nav_pages.Dashboard as _pg_Dashboard
-    import nav_pages.Help as _pg_Help
-    import nav_pages.Run_Detail as _pg_Run_Detail
-except Exception as e:
-    st.warning(f"nav_pages import failed ({e}). Trying direct file execution from /nav_pages.")
+# Build renderers for each page using flexible filename matching
+_pg_setupwizard      = _renderer_for(["setup", "wizard"])
+_pg_chat             = _renderer_for(["chat"])
+_pg_agents           = _renderer_for(["agents"])
+_pg_recipes          = _renderer_for(["recipes"])
+_pg_mcp_tools        = _renderer_for(["mcp", "tools"])
+_pg_settings         = _renderer_for(["settings"])
+_pg_workflows        = _renderer_for(["workflows"])
+_pg_fixed_workflows  = _renderer_for(["fixed", "workflows"])
+_pg_dashboard        = _renderer_for(["dashboard"])
+_pg_help             = _renderer_for(["help"])
+_pg_run_detail       = _renderer_for(["run", "detail"])
 
-    NAV_ROOT = APP_ROOT / "nav_pages"
-    PAGES_ROOT = APP_ROOT / "pages"
-
-    # file names (case-sensitive!)
-    nav_map = {
-        "SetupWizard": "SetupWizard.py",
-        "Chat": "Chat.py",
-        "Agents": "Agents.py",
-        "Recipes": "Recipes.py",
-        "MCP_Tools": "MCP_Tools.py",
-        "Settings": "Settings.py",
-        "Workflows": "Workflows.py",
-        "Fixed_Workflows": "Fixed_Workflows.py",
-        "Dashboard": "Dashboard.py",
-        "Help": "Help.py",
-        "Run_Detail": "Run_Detail.py",
-    }
-
-    def _fb_from(root: Path, key: str):
-        return _wrap_script(root / nav_map[key])
-
-    def _exists_in(root: Path, key: str) -> bool:
-        return (root / nav_map[key]).exists()
-
-    # Prefer nav_pages/ if present; else fall back to pages/
-    _pg_SetupWizard = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "SetupWizard") else PAGES_ROOT, "SetupWizard")})()
-    _pg_Chat = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Chat") else PAGES_ROOT, "Chat")})()
-    _pg_Agents = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Agents") else PAGES_ROOT, "Agents")})()
-    _pg_Recipes = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Recipes") else PAGES_ROOT, "Recipes")})()
-    _pg_MCP_Tools = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "MCP_Tools") else PAGES_ROOT, "MCP_Tools")})()
-    _pg_Settings = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Settings") else PAGES_ROOT, "Settings")})()
-    _pg_Workflows = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Workflows") else PAGES_ROOT, "Workflows")})()
-    _pg_Fixed_Workflows = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Fixed_Workflows") else PAGES_ROOT, "Fixed_Workflows")})()
-    _pg_Dashboard = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Dashboard") else PAGES_ROOT, "Dashboard")})()
-    _pg_Help = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Help") else PAGES_ROOT, "Help")})()
-    _pg_Run_Detail = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Run_Detail") else PAGES_ROOT, "Run_Detail")})()
-
-# ---------- Build pages list ----------
+# ---------- Pages list (clean, lowercase URL slugs) ----------
 def _pages_list():
-    # Prefer stable url_paths (avoid empty string for root in some Streamlit versions)
     return [
-        st.Page(home,                       title="Home",            url_path="home"),
-        st.Page(_pg_SetupWizard.render,     title="Setup Wizard",    url_path="SetupWizard"),
-        st.Page(_pg_Chat.render,            title="Chat",            url_path="Chat"),
-        st.Page(_pg_Agents.render,          title="Agents",          url_path="Agents"),
-        st.Page(_pg_Recipes.render,         title="Recipes",         url_path="Recipes"),
-        st.Page(_pg_MCP_Tools.render,       title="MCP Tools",       url_path="mcp-tools"),
-        st.Page(_pg_Settings.render,        title="Settings",        url_path="Settings"),
-        st.Page(_pg_Workflows.render,       title="Workflows",       url_path="Workflows"),
-        st.Page(_pg_Fixed_Workflows.render, title="Fixed-Workflows", url_path="fixed-Workflows"),
-        st.Page(_pg_Dashboard.render,       title="Dashboard",       url_path="Dashboard"),
-        st.Page(_pg_Help.render,            title="Help",            url_path="Help"),
-        st.Page(_pg_Run_Detail.render,      title="Run Detail",      url_path="run-detail"),
+        st.Page(home,                  title="Home",            url_path=""),
+        st.Page(_pg_setupwizard,       title="Setup Wizard",    url_path="setupwizard"),
+        st.Page(_pg_chat,              title="Chat",            url_path="chat"),
+        st.Page(_pg_agents,            title="Agents",          url_path="agents"),
+        st.Page(_pg_recipes,           title="Recipes",         url_path="recipes"),
+        st.Page(_pg_mcp_tools,         title="MCP Tools",       url_path="mcp-tools"),
+        st.Page(_pg_settings,          title="Settings",        url_path="settings"),
+        st.Page(_pg_workflows,         title="Workflows",       url_path="workflows"),
+        st.Page(_pg_fixed_workflows,   title="Fixed-Workflows", url_path="fixed-workflows"),
+        st.Page(_pg_dashboard,         title="Dashboard",       url_path="dashboard"),
+        st.Page(_pg_help,              title="Help",            url_path="help"),
+        st.Page(_pg_run_detail,        title="Run Detail",      url_path="run-detail"),
     ]
 
 # ---------- Run app with navigation (with legacy fallback) ----------
@@ -311,7 +276,6 @@ try:
     if hasattr(st, "navigation") and hasattr(st, "Page"):
         st.navigation(_pages_list()).run()
     else:
-        # Legacy fallback: simple sidebar select
         st.sidebar.info("Using legacy navigation fallback (update Streamlit to enable st.navigation).")
         options = [
             "Home", "Setup Wizard", "Chat", "Agents", "Recipes", "MCP Tools",
@@ -320,20 +284,20 @@ try:
         choice = st.sidebar.selectbox("Navigate", options, index=0)
         dispatch = {
             "Home": home,
-            "Setup Wizard": _pg_SetupWizard.render,
-            "Chat": _pg_Chat.render,
-            "Agents": _pg_Agents.render,
-            "Recipes": _pg_Recipes.render,
-            "MCP Tools": _pg_MCP_Tools.render,
-            "Settings": _pg_Settings.render,
-            "Workflows": _pg_Workflows.render,
-            "Fixed-Workflows": _pg_Fixed_Workflows.render,
-            "Dashboard": _pg_Dashboard.render,
-            "Help": _pg_Help.render,
-            "Run Detail": _pg_Run_Detail.render,
+            "Setup Wizard": _pg_setupwizard,
+            "Chat": _pg_chat,
+            "Agents": _pg_agents,
+            "Recipes": _pg_recipes,
+            "MCP Tools": _pg_mcp_tools,
+            "Settings": _pg_settings,
+            "Workflows": _pg_workflows,
+            "Fixed-Workflows": _pg_fixed_workflows,
+            "Dashboard": _pg_dashboard,
+            "Help": _pg_help,
+            "Run Detail": _pg_run_detail,
         }
         dispatch[choice]()
 except Exception as nav_ex:
     st.error(f"Navigation failed: {nav_ex}")
-    # As a last resort, show Home so the app still renders
+    # Last resort, still render Home
     home()
