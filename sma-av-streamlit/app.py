@@ -380,3 +380,20 @@ if (_get_qp("debug") or "0").strip().lower() in ("1", "true", "yes"):
                 if paths:
                     st.caption(f"Searched for '{label}' ({key}):")
                     st.code("\n".join(str(p) for p in paths), language="text")
+st.divider()
+st.markdown(filtered_md, unsafe_allow_html=False)
+
+# ---------- Optional debug ----------
+def _get_query_params():
+    try:
+        return dict(st.query_params)
+    except Exception:
+        return st.experimental_get_query_params()  # for older versions
+
+qp = _get_query_params()
+debug_on = str(qp.get("debug", ["0"])[0]).lower() in ("1", "true", "yes")
+
+with st.expander("Debug: RUNBOOK.md lookup paths", expanded=debug_on):
+    st.caption(f"App root resolved to: `{APP_ROOT}`")
+    st.caption(f"Working dir: `{CWD}`")
+    st.code("\n".join(str(c) for c in candidates), language="text")
