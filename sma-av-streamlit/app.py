@@ -1,7 +1,6 @@
 # app.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-
 import re
 import runpy
 from functools import lru_cache
@@ -12,6 +11,10 @@ from typing import Optional, Dict, Any, List
 import requests
 from PIL import Image, UnidentifiedImageError
 import streamlit as st
+import sys
+# Ensure the directory that contains the "nav_pages" package is importable
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 
 # ---------- Constants ----------
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
@@ -215,19 +218,16 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
         st.caption(f"App root resolved to: `{APP_ROOT}`")
         st.caption(f"Working dir: `{CWD}`")
         st.code("\n".join(str(c) for c in candidates), language="text")
-
 # ---------- Navigation: import wrappers, with robust fallbacks ----------
+
+
 def _wrap_script(path: Path):
     """Return a render() that executes a standalone page script via runpy."""
     def _render():
         runpy.run_path(str(path), run_name="__main__")
     return _render
 
-# Preferred: nav_pages.* modules that expose `render()`
-_pg_setupwizard = _pg_chat = _pg_agents = _pg_recipes = None
-_pg_mcp_tools = _pg_settings = _pg_workflows = _pg_fixed_workflows = None
-_pg_dashboard = _pg_help = _pg_run_detail = None
-
+# Try regular imports first (preferred when nav_pages is a package)
 try:
     import nav_pages.setupwizard as _pg_setupwizard
     import nav_pages.chat as _pg_chat
@@ -241,41 +241,55 @@ try:
     import nav_pages.help as _pg_help
     import nav_pages.run_detail as _pg_run_detail
 except Exception as e:
-    # Fallback to executing scripts under pages/ if the package isn't importable
-    st.warning(f"nav_pages import failed ({e}). Falling back to executing scripts from /pages.")
-    _pages_dir = APP_ROOT / "pages"
-    # Map expected names to files; adjust if your filenames differ
-    fallback_map = {
-        "setupwizard": "Setup_Wizard.py",
-        "chat": "Chat.py",
-        "agents": "Agents.py",
-        "recipes": "Recipes.py",
-        "mcp_tools": "MCP_Tools.py",
-        "settings": "Settings.py",
-        "workflows": "Workflows.py",
-        "fixed_workflows": "Fixed_Workflows.py",
-        "dashboard": "Dashboard.py",
-        "help": "Help.py",
-        "run_detail": "Run_Detail.py",
+    st.warning(f"nav_pages import failed ({e}). Trying direct file execution from /nav_pages.")
+
+    NAV_ROOT = APP_ROOT / "nav_pages"
+    PAGES_ROOT = APP_ROOT / "pages"
+
+    # file names (case-sensitive!)
+    nav_map = {
+        "setupwizard": "setupwizard.py",
+        "chat": "chat.py",
+        "agents": "agents.py",
+        "recipes": "recipes.py",
+        "mcp_tools": "mcp_tools.py",
+        "settings": "settings.py",
+        "workflows": "workflows.py",
+        "fixed_workflows": "fixed_workflows.py",
+        "dashboard": "dashboard.py",
+        "help": "help.py",
+        "run_detail": "run_detail.py",
     }
-    def _fb(name: str):
-        return _wrap_script(_pages_dir / fallback_map[name])
 
-    class _FB:  # simple namespace with render attr
-        def __init__(self, name: str):
-            self.render = _fb(name)
+    def _fb_from(root: Path, key: str):
+        return _wrap_script(root / nav_map[key])
 
-    _pg_setupwizard = _FB("setupwizard")
-    _pg_chat = _FB("chat")
-    _pg_agents = _FB("agents")
-    _pg_recipes = _FB("recipes")
-    _pg_mcp_tools = _FB("mcp_tools")
-    _pg_settings = _FB("settings")
-    _pg_workflows = _FB("workflows")
-    _pg_fixed_workflows = _FB("fixed_workflows")
-    _pg_dashboard = _FB("dashboard")
-    _pg_help = _FB("help")
-    _pg_run_detail = _FB("run_detail")
+    def _exists_in(root: Path, key: str) -> bool:
+        return (root / nav_map[key]).exists()
+
+    # Prefer nav_pages/ if present; else fall back to pages/
+    _pg_setupwizard = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "setupwizard") else PAGES_ROOT, "setupwizard")})()
+    _pg_chat = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "chat") else PAGES_ROOT, "chat")})()
+    _pg_agents = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "agents") else PAGES_ROOT, "agents")})()
+    _pg_recipes = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "recipes") else PAGES_ROOT, "recipes")})()
+    _pg_mcp_tools = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "mcp_tools") else PAGES_ROOT, "mcp_tools")})()
+    _pg_settings = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "settings") else PAGES_ROOT, "settings")})()
+    _pg_workflows = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "workflows") else PAGES_ROOT, "workflows")})()
+    _pg_fixed_workflows = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "fixed_workflows") else PAGES_ROOT, "fixed_workflows")})()
+    _pg_dashboard = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "dashboard") else PAGES_ROOT, "dashboard")})()
+    _pg_help = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "help") else PAGES_ROOT, "help")})()
+    _pg_run_detail = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "run_detail") else PAGES_ROOT, "run_detail")})()
 
 # ---------- Build pages list ----------
 def _pages_list():
