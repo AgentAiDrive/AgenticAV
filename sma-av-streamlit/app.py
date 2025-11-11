@@ -1,10 +1,13 @@
+# app.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import re
 import runpy
+from functools import lru_cache
 from pathlib import Path
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 import requests
 from PIL import Image, UnidentifiedImageError
@@ -14,7 +17,7 @@ import streamlit as st
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
 ICON_URL = "https://raw.githubusercontent.com/AgentAiDrive/AV-AIops/refs/heads/IPAV-Agents/sma-av-streamlit/ipav.ico"
 
-# ---------- Cached icon fetch (idempotent, fast) ----------
+# ---------- Icon fetch (pure Python; no Streamlit calls) ----------
 def _fetch_pil_image(url: str) -> Optional[Image.Image]:
     try:
         r = requests.get(url, timeout=10)
@@ -25,13 +28,13 @@ def _fetch_pil_image(url: str) -> Optional[Image.Image]:
     except (requests.RequestException, UnidentifiedImageError, OSError):
         return None
 
-@st.cache_data(show_spinner=False)
+@lru_cache(maxsize=2)
 def _fetch_pil_image_cached(url: str) -> Optional[Image.Image]:
     return _fetch_pil_image(url)
 
 _icon_img = _fetch_pil_image_cached(ICON_URL) or "🛠️"
 
-# ---------- Page config (must be first Streamlit command) ----------
+# ---------- Page config (must be the first Streamlit command) ----------
 st.set_page_config(page_title="Agentic AV Ops", page_icon=_icon_img, layout="wide")
 
 # ---------- Repo paths ----------
@@ -45,21 +48,50 @@ def find_repo_root() -> Path:
 APP_ROOT = find_repo_root()
 CWD = Path.cwd()
 
-# ---------- Main Home page body (your original content) ----------
+# ---------- Query params helpers (robust to new/old APIs) ----------
+def _get_query_params_dict() -> Dict[str, Any]:
+    """
+    Returns a simple dict of {str: str} for query params.
+    Works with both modern st.query_params and older experimental API.
+    """
+    try:
+        qp = st.query_params  # modern: Mapping[str, str]
+        if hasattr(qp, "to_dict"):  # future-proof
+            qp = qp.to_dict()
+        if isinstance(qp, dict):
+            # Normalize values to strings
+            norm = {}
+            for k, v in qp.items():
+                if isinstance(v, list):
+                    norm[k] = v[0] if v else ""
+                else:
+                    norm[k] = v
+            return norm
+        return dict(qp)
+    except Exception:
+        # Legacy fallback
+        qp_legacy = st.experimental_get_query_params()
+        return {k: (v[0] if isinstance(v, list) and v else "") for k, v in qp_legacy.items()}
+
+def _get_qp(key: str, default: Optional[str] = None) -> Optional[str]:
+    return _get_query_params_dict().get(key, default)
+
+# ---------- Main Home page ----------
 def home():
-    # ---------- Header ----------
+    # Header / Identity
     st.image(LOGO_URL, caption="", width=190)
     st.title("Agentic AV Ops - SOP Workflow Orchestration")
-    st.write("Use sidebar to navigate.")
+    st.write("Use the sidebar to navigate.")
 
+    # Model indicator (lightweight status in sidebar)
     def model_light():
-        p = (st.session_state.get("llm_provider") or "OpenAI")
+        p = st.session_state.get("llm_provider") or "OpenAI"
         dot = "🟢" if p == "OpenAI" else "🔵"
         st.sidebar.markdown(f"**Model**: {dot} {p}")
 
     model_light()
 
-    # ---------- Try to import init_db safely ----------
+    # Try to import and run DB seed idempotently
     try:
         from core.db.seed import init_db as _imported_init_db
         _imported_init_db()
@@ -69,9 +101,9 @@ def home():
     except Exception as db_exception:
         st.error(f"❌ init_db failed to execute: {db_exception}")
 
-    # ---------- Support tips ----------
+    # Page tips (safe default if import fails)
     try:
-        from core.ui.page_tips import PAGE_TIPS
+        from core.ui.page_tips import PAGE_TIPS  # type: ignore
     except Exception:
         PAGE_TIPS = {
             "Setup Wizard": (
@@ -111,7 +143,7 @@ def home():
             ),
         }
 
-    # ---------- RUNBOOK lookup ----------
+    # RUNBOOK lookup
     candidates = [
         APP_ROOT / "docs" / "RUNBOOK.md",
         APP_ROOT / "RUNBOOK.md",
@@ -120,7 +152,6 @@ def home():
     ]
     runbook_path = next((p for p in candidates if p.exists()), None)
 
-    # ---------- Load runbook ----------
     if not runbook_path:
         st.warning("RUNBOOK.md not found. Showing placeholder.")
         runbook_md = """# SMA AV-AI Ops — Runbook (Placeholder)
@@ -131,7 +162,7 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
         runbook_md = runbook_path.read_text(encoding="utf-8")
         st.success(f"Loaded runbook: `{runbook_path}`")
 
-    # ---------- Page tips ----------
+    # Global Page Tips
     with st.expander("Global Page Tips (quick reference)", expanded=False):
         cols = st.columns(2)
         for i, k in enumerate(PAGE_TIPS):
@@ -141,7 +172,7 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
 
     st.divider()
 
-    # ---------- Table of contents ----------
+    # TOC builder
     def build_toc(md: str):
         lines = md.splitlines()
         items = []
@@ -176,52 +207,122 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
     st.divider()
     st.markdown(filtered_md, unsafe_allow_html=False)
 
-    # ---------- Optional debug ----------
-    def _get_query_params():
-        try:
-            return dict(st.query_params)  # new API
-        except Exception:
-            return st.experimental_get_query_params()  # fallback for older versions
-
-    qp = _get_query_params()
-    debug_on = str(qp.get("debug", ["0"])[0]).lower() in ("1", "true", "yes")
+    # Optional debug
+    debug_val = (_get_qp("debug") or "0").strip().lower()
+    debug_on = debug_val in ("1", "true", "yes")
 
     with st.expander("Debug: RUNBOOK.md lookup paths", expanded=debug_on):
         st.caption(f"App root resolved to: `{APP_ROOT}`")
         st.caption(f"Working dir: `{CWD}`")
         st.code("\n".join(str(c) for c in candidates), language="text")
 
-# ---------- Navigation (wrappers call your existing pages/*.py) ----------
-# These wrappers live in sma-av-streamlit/nav_pages/*.py
-# Each exposes a `render()` that executes the existing script via runpy.
-import nav_pages.setupwizard as _pg_setupwizard
-import nav_pages.chat as _pg_chat
-import nav_pages.agents as _pg_agents
-import nav_pages.recipes as _pg_recipes
-import nav_pages.mcp_tools as _pg_mcp_tools
-import nav_pages.settings as _pg_settings
-import nav_pages.workflows as _pg_workflows
-import nav_pages.fixed_workflows as _pg_fixed_workflows
-import nav_pages.dashboard as _pg_dashboard
-import nav_pages.help as _pg_help
-import nav_pages.run_detail as _pg_run_detail
+# ---------- Navigation: import wrappers, with robust fallbacks ----------
+def _wrap_script(path: Path):
+    """Return a render() that executes a standalone page script via runpy."""
+    def _render():
+        runpy.run_path(str(path), run_name="__main__")
+    return _render
 
-_pages = [
-    st.Page(home,                       title="Home",            url_path=""),
-    st.Page(_pg_setupwizard.render,     title="Setup Wizard",    url_path="setupwizard"),
-    st.Page(_pg_chat.render,            title="Chat",            url_path="chat"),
-    st.Page(_pg_agents.render,          title="Agents",          url_path="agents"),
-    st.Page(_pg_recipes.render,         title="Recipes",         url_path="recipes"),
-    st.Page(_pg_mcp_tools.render,       title="MCP Tools",       url_path="mcp-tools"),
-    st.Page(_pg_settings.render,        title="Settings",        url_path="settings"),
-    st.Page(_pg_workflows.render,       title="Workflows",       url_path="workflows"),
-    st.Page(_pg_fixed_workflows.render, title="Fixed-Workflows", url_path="fixed-workflows"),
-    st.Page(_pg_dashboard.render,       title="Dashboard",       url_path="dashboard"),
-    st.Page(_pg_help.render,            title="Help",            url_path="help"),
-    st.Page(_pg_run_detail.render,      title="Run Detail",      url_path="run-detail"),
-]
+# Preferred: nav_pages.* modules that expose `render()`
+_pg_setupwizard = _pg_chat = _pg_agents = _pg_recipes = None
+_pg_mcp_tools = _pg_settings = _pg_workflows = _pg_fixed_workflows = None
+_pg_dashboard = _pg_help = _pg_run_detail = None
 
-st.navigation(_pages).run()
+try:
+    import nav_pages.setupwizard as _pg_setupwizard
+    import nav_pages.chat as _pg_chat
+    import nav_pages.agents as _pg_agents
+    import nav_pages.recipes as _pg_recipes
+    import nav_pages.mcp_tools as _pg_mcp_tools
+    import nav_pages.settings as _pg_settings
+    import nav_pages.workflows as _pg_workflows
+    import nav_pages.fixed_workflows as _pg_fixed_workflows
+    import nav_pages.dashboard as _pg_dashboard
+    import nav_pages.help as _pg_help
+    import nav_pages.run_detail as _pg_run_detail
+except Exception as e:
+    # Fallback to executing scripts under pages/ if the package isn't importable
+    st.warning(f"nav_pages import failed ({e}). Falling back to executing scripts from /pages.")
+    _pages_dir = APP_ROOT / "pages"
+    # Map expected names to files; adjust if your filenames differ
+    fallback_map = {
+        "setupwizard": "Setup_Wizard.py",
+        "chat": "Chat.py",
+        "agents": "Agents.py",
+        "recipes": "Recipes.py",
+        "mcp_tools": "MCP_Tools.py",
+        "settings": "Settings.py",
+        "workflows": "Workflows.py",
+        "fixed_workflows": "Fixed_Workflows.py",
+        "dashboard": "Dashboard.py",
+        "help": "Help.py",
+        "run_detail": "Run_Detail.py",
+    }
+    def _fb(name: str):
+        return _wrap_script(_pages_dir / fallback_map[name])
 
+    class _FB:  # simple namespace with render attr
+        def __init__(self, name: str):
+            self.render = _fb(name)
 
+    _pg_setupwizard = _FB("setupwizard")
+    _pg_chat = _FB("chat")
+    _pg_agents = _FB("agents")
+    _pg_recipes = _FB("recipes")
+    _pg_mcp_tools = _FB("mcp_tools")
+    _pg_settings = _FB("settings")
+    _pg_workflows = _FB("workflows")
+    _pg_fixed_workflows = _FB("fixed_workflows")
+    _pg_dashboard = _FB("dashboard")
+    _pg_help = _FB("help")
+    _pg_run_detail = _FB("run_detail")
 
+# ---------- Build pages list ----------
+def _pages_list():
+    # Prefer stable url_paths (avoid empty string for root in some Streamlit versions)
+    return [
+        st.Page(home,                       title="Home",            url_path="home"),
+        st.Page(_pg_setupwizard.render,     title="Setup Wizard",    url_path="setupwizard"),
+        st.Page(_pg_chat.render,            title="Chat",            url_path="chat"),
+        st.Page(_pg_agents.render,          title="Agents",          url_path="agents"),
+        st.Page(_pg_recipes.render,         title="Recipes",         url_path="recipes"),
+        st.Page(_pg_mcp_tools.render,       title="MCP Tools",       url_path="mcp-tools"),
+        st.Page(_pg_settings.render,        title="Settings",        url_path="settings"),
+        st.Page(_pg_workflows.render,       title="Workflows",       url_path="workflows"),
+        st.Page(_pg_fixed_workflows.render, title="Fixed-Workflows", url_path="fixed-workflows"),
+        st.Page(_pg_dashboard.render,       title="Dashboard",       url_path="dashboard"),
+        st.Page(_pg_help.render,            title="Help",            url_path="help"),
+        st.Page(_pg_run_detail.render,      title="Run Detail",      url_path="run-detail"),
+    ]
+
+# ---------- Run app with navigation (with legacy fallback) ----------
+try:
+    if hasattr(st, "navigation") and hasattr(st, "Page"):
+        st.navigation(_pages_list()).run()
+    else:
+        # Legacy fallback: simple sidebar select
+        st.sidebar.info("Using legacy navigation fallback (update Streamlit to enable st.navigation).")
+        options = [
+            "Home", "Setup Wizard", "Chat", "Agents", "Recipes", "MCP Tools",
+            "Settings", "Workflows", "Fixed-Workflows", "Dashboard", "Help", "Run Detail"
+        ]
+        choice = st.sidebar.selectbox("Navigate", options, index=0)
+        dispatch = {
+            "Home": home,
+            "Setup Wizard": _pg_setupwizard.render,
+            "Chat": _pg_chat.render,
+            "Agents": _pg_agents.render,
+            "Recipes": _pg_recipes.render,
+            "MCP Tools": _pg_mcp_tools.render,
+            "Settings": _pg_settings.render,
+            "Workflows": _pg_workflows.render,
+            "Fixed-Workflows": _pg_fixed_workflows.render,
+            "Dashboard": _pg_dashboard.render,
+            "Help": _pg_help.render,
+            "Run Detail": _pg_run_detail.render,
+        }
+        dispatch[choice]()
+except Exception as nav_ex:
+    st.error(f"Navigation failed: {nav_ex}")
+    # As a last resort, show Home so the app still renders
+    home()
