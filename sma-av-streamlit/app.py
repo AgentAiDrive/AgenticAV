@@ -7,12 +7,13 @@ import runpy
 from functools import lru_cache
 from pathlib import Path
 from io import BytesIO
-from typing import Optional, Dict, Any, Iterable
+from typing import Optional, Dict, Any, Iterable, Callable
 
 import requests
 from PIL import Image, UnidentifiedImageError
 import streamlit as st
 import sys
+import importlib
 
 # ---------- Constants ----------
 LOGO_URL = "https://github.com/user-attachments/assets/00c68a1d-224f-4170-b44f-9982bf4b5e8d"
@@ -35,7 +36,7 @@ def _fetch_pil_image_cached(url: str) -> Optional[Image.Image]:
 
 _icon_img = _fetch_pil_image_cached(ICON_URL) or "🛠️"
 
-# ---------- Page config (must be first Streamlit command) ----------
+# ---------- Page config (must be the first Streamlit command) ----------
 st.set_page_config(page_title="Agentic AV Ops", page_icon=_icon_img, layout="wide")
 
 # ---------- Repo paths ----------
@@ -59,7 +60,7 @@ def _unique(seq: Iterable[Path]) -> list[Path]:
     return out
 
 def _candidate_roots() -> list[Path]:
-    # cover app dir, its parent (repo root), working dir, and their parents
+    # Cover app dir, its parent (repo root), working dir, and their parents
     roots = [
         APP_ROOT,
         APP_ROOT.parent,
@@ -83,7 +84,7 @@ def _ensure_on_syspath(paths: Iterable[Path]):
         if s not in sys.path:
             sys.path.insert(0, s)
 
-# add all candidate roots to import path so packages next to or above app are importable
+# Add all candidate roots to Python path so sibling packages are importable
 _ensure_on_syspath(_candidate_roots())
 
 # ---------- Query params helpers ----------
@@ -108,7 +109,7 @@ def _get_query_params_dict() -> Dict[str, Any]:
 def _get_qp(key: str, default: Optional[str] = None) -> Optional[str]:
     return _get_query_params_dict().get(key, default)
 
-# ---------- Main Home page ----------
+# ---------- Home page ----------
 def home():
     st.image(LOGO_URL, caption="", width=190)
     st.title("Agentic AV Ops - SOP Workflow Orchestration")
@@ -239,23 +240,24 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
             st.caption(f"nav_pages found at: `{_discover_dir('nav_pages')}`")
             st.caption(f"pages found at: `{_discover_dir('pages')}`")
 
-# ---------- Navigation helpers ----------
-def _wrap_script(path: Path):
+# ---------- Page discovery / import helpers ----------
+_SEARCH_CACHE: Dict[str, list[Path]] = {}
+
+def _wrap_script(path: Path) -> Callable[[], None]:
     def _render():
         runpy.run_path(str(path), run_name="__main__")
     return _render
 
-def _resolve_page_file(key: str) -> Path:
+def _search_page_file(key: str) -> Optional[Path]:
     """
     Return an existing file for the page key by searching in:
-      1) nav_pages/ (lowercase)
-      2) pages/ (several common casings)
-    Raises FileNotFoundError with a helpful message if nothing matches.
+      1) nav_pages/ (lowercase preferred)
+      2) pages/ (common CamelCase/underscore variants)
+    Returns None if not found. Records all searched paths in _SEARCH_CACHE[key].
     """
     NAV = _discover_dir("nav_pages")
     PAGES = _discover_dir("pages")
 
-    # candidate filenames per key (ordered by preference)
     name_sets: Dict[str, list[str]] = {
         "setupwizard":      ["setupwizard.py", "SetupWizard.py", "Setup_Wizard.py", "setup_wizard.py"],
         "chat":             ["chat.py", "Chat.py"],
@@ -269,68 +271,78 @@ def _resolve_page_file(key: str) -> Path:
         "help":             ["help.py", "Help.py"],
         "run_detail":       ["run_detail.py", "Run_Detail.py", "run-detail.py"],
     }
-    candidates: list[Path] = []
 
-    fnames = name_sets[key]
+    searched: list[Path] = []
+    candidates: list[Path] = []
+    names = name_sets.get(key, [])
+
     if NAV:
-        candidates += [NAV / f for f in fnames]
+        candidates += [NAV / f for f in names]
     if PAGES:
-        candidates += [PAGES / f for f in fnames]
+        candidates += [PAGES / f for f in names]
 
     for p in candidates:
+        searched.append(p)
         if p.exists():
+            _SEARCH_CACHE[key] = searched
             return p
 
-    searched = "\n  ".join(str(p) for p in candidates)
-    raise FileNotFoundError(f"No file found for page '{key}'. Searched:\n  {searched}")
+    _SEARCH_CACHE[key] = searched
+    return None
 
-# ---------- Try package imports first (prefer lowercase modules) ----------
-try:
-    import nav_pages.setupwizard as _pg_setupwizard
-    import nav_pages.chat as _pg_chat
-    import nav_pages.agents as _pg_agents
-    import nav_pages.recipes as _pg_recipes
-    import nav_pages.mcp_tools as _pg_mcp_tools
-    import nav_pages.settings as _pg_settings
-    import nav_pages.workflows as _pg_workflows
-    import nav_pages.fixed_workflows as _pg_fixed_workflows
-    import nav_pages.dashboard as _pg_dashboard
-    import nav_pages.help as _pg_help
-    import nav_pages.run_detail as _pg_run_detail
-except Exception as e:
-    st.warning(f"nav_pages import failed ({e}). Falling back to direct file execution.")
-    # Build lightweight wrappers that run the discovered files
-    class _FB:
-        def __init__(self, key: str):
-            self.render = _wrap_script(_resolve_page_file(key))
-    _pg_setupwizard      = _FB("setupwizard")
-    _pg_chat             = _FB("chat")
-    _pg_agents           = _FB("agents")
-    _pg_recipes          = _FB("recipes")
-    _pg_mcp_tools        = _FB("mcp_tools")
-    _pg_settings         = _FB("settings")
-    _pg_workflows        = _FB("workflows")
-    _pg_fixed_workflows  = _FB("fixed_workflows")
-    _pg_dashboard        = _FB("dashboard")
-    _pg_help             = _FB("help")
-    _pg_run_detail       = _FB("run_detail")
+def _import_or_wrap(module_path: str, fallback_key: str) -> Optional[Callable[[], None]]:
+    """
+    Try to import nav_pages.<module>.render
+    If that fails, search for a file and return a wrapper that runs it.
+    Returns None if neither is available.
+    """
+    try:
+        mod = importlib.import_module(module_path)
+        render = getattr(mod, "render", None)
+        if callable(render):
+            return render
+    except Exception:
+        pass  # fall through to file search
+
+    file_path = _search_page_file(fallback_key)
+    if file_path:
+        return _wrap_script(file_path)
+    return None
+
+# ---------- Build page registry ----------
+# Each entry: (label, url_path, module_import, search_key)
+_PAGE_SPECS = [
+    ("Setup Wizard",    "setupwizard",     "nav_pages.setupwizard",     "setupwizard"),
+    ("Chat",            "chat",            "nav_pages.chat",            "chat"),
+    ("Agents",          "agents",          "nav_pages.agents",          "agents"),
+    ("Recipes",         "recipes",         "nav_pages.recipes",         "recipes"),
+    ("MCP Tools",       "mcp-tools",       "nav_pages.mcp_tools",       "mcp_tools"),
+    ("Settings",        "settings",        "nav_pages.settings",        "settings"),
+    ("Workflows",       "workflows",       "nav_pages.workflows",       "workflows"),
+    ("Fixed-Workflows", "fixed-workflows", "nav_pages.fixed_workflows", "fixed_workflows"),
+    ("Dashboard",       "dashboard",       "nav_pages.dashboard",       "dashboard"),
+    ("Help",            "help",            "nav_pages.help",            "help"),
+    ("Run Detail",      "run-detail",      "nav_pages.run_detail",      "run_detail"),
+]
+
+def _resolve_pages() -> list[tuple[str, str, Callable[[], None]]]:
+    """
+    Returns a list of (label, url_path, render_fn) for pages that are available.
+    Missing pages are skipped.
+    """
+    resolved: list[tuple[str, str, Callable[[], None]]] = []
+    for label, url_path, module_path, key in _PAGE_SPECS:
+        render_fn = _import_or_wrap(module_path, key)
+        if render_fn:
+            resolved.append((label, url_path, render_fn))
+    return resolved
 
 # ---------- Pages ----------
 def _pages_list():
-    return [
-        st.Page(home,                       title="Home",            url_path="home"),
-        st.Page(_pg_setupwizard.render,     title="Setup Wizard",    url_path="setupwizard"),
-        st.Page(_pg_chat.render,            title="Chat",            url_path="chat"),
-        st.Page(_pg_agents.render,          title="Agents",          url_path="agents"),
-        st.Page(_pg_recipes.render,         title="Recipes",         url_path="recipes"),
-        st.Page(_pg_mcp_tools.render,       title="MCP Tools",       url_path="mcp-tools"),
-        st.Page(_pg_settings.render,        title="Settings",        url_path="settings"),
-        st.Page(_pg_workflows.render,       title="Workflows",       url_path="workflows"),
-        st.Page(_pg_fixed_workflows.render, title="Fixed-Workflows", url_path="fixed-workflows"),
-        st.Page(_pg_dashboard.render,       title="Dashboard",       url_path="dashboard"),
-        st.Page(_pg_help.render,            title="Help",            url_path="help"),
-        st.Page(_pg_run_detail.render,      title="Run Detail",      url_path="run-detail"),
-    ]
+    pages = [st.Page(home, title="Home", url_path="home")]
+    for label, url_path, render_fn in _resolve_pages():
+        pages.append(st.Page(render_fn, title=label, url_path=url_path))
+    return pages
 
 # ---------- Run with navigation (legacy fallback supported) ----------
 try:
@@ -338,31 +350,33 @@ try:
         st.navigation(_pages_list()).run()
     else:
         st.sidebar.info("Using legacy navigation fallback (update Streamlit to enable st.navigation).")
-        options = [
-            "Home", "Setup Wizard", "Chat", "Agents", "Recipes", "MCP Tools",
-            "Settings", "Workflows", "Fixed-Workflows", "Dashboard", "Help", "Run Detail"
-        ]
-        choice = st.sidebar.selectbox("Navigate", options, index=0)
-        dispatch = {
-            "Home": home,
-            "Setup Wizard": _pg_setupwizard.render,
-            "Chat": _pg_chat.render,
-            "Agents": _pg_agents.render,
-            "Recipes": _pg_recipes.render,
-            "MCP Tools": _pg_mcp_tools.render,
-            "Settings": _pg_settings.render,
-            "Workflows": _pg_workflows.render,
-            "Fixed-Workflows": _pg_fixed_workflows.render,
-            "Dashboard": _pg_dashboard.render,
-            "Help": _pg_help.render,
-            "Run Detail": _pg_run_detail.render,
-        }
-        dispatch[choice]()
-except FileNotFoundError as e:
-    st.error(f"Navigation failed: {e}")
-    with st.expander("Troubleshooting — searched paths", expanded=True):
-        st.code(str(e), language="text")
-    home()
+        options: list[tuple[str, Callable[[], None]]] = [("Home", home)]
+        for label, _, render_fn in _resolve_pages():
+            options.append((label, render_fn))
+
+        labels = [l for (l, _) in options]
+        choice = st.sidebar.selectbox("Navigate", labels, index=0)
+        for label, fn in options:
+            if label == choice:
+                fn()
+                break
 except Exception as nav_ex:
     st.error(f"Navigation failed: {nav_ex}")
     home()
+
+# ---------- Optional debug sidebar for page presence ----------
+if (_get_qp("debug") or "0").strip().lower() in ("1", "true", "yes"):
+    with st.sidebar.expander("Debug: Page availability", expanded=False):
+        avail = [label for (label, _, _) in _resolve_pages()]
+        st.write("Available:", ", ".join(avail) or "none")
+        missing = [label for (label, _, _) in _PAGE_SPECS if label not in avail]
+        if missing:
+            st.write("Missing:", ", ".join(missing))
+            # show searched paths for missing keys
+            key_by_label = {label: key for (label, _, _, key) in _PAGE_SPECS}
+            for label in missing:
+                key = key_by_label[label]
+                paths = _SEARCH_CACHE.get(key, [])
+                if paths:
+                    st.caption(f"Searched for '{label}' ({key}):")
+                    st.code("\n".join(str(p) for p in paths), language="text")
