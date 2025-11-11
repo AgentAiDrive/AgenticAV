@@ -22,7 +22,7 @@ st.set_page_config(page_title="Run Details", page_icon="🔎", layout="wide")
 st.title("🔎 Run Details")
 
 # Extract run_id from query parameters
-params = st.experimental_get_query_params()
+params = st.query_params()
 run_id_vals = params.get("run_id") or []
 try:
     run_id = int(run_id_vals[0]) if run_id_vals else None
