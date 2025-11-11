@@ -22,12 +22,25 @@ st.set_page_config(page_title="Run Details", page_icon="🔎", layout="wide")
 st.title("🔎 Run Details")
 
 # Extract run_id from query parameters
-params = st.query_params()
-run_id_vals = params.get("run_id") or []
+# ---- Extract run_id from query parameters (robust to str or list) ----
+qp = st.query_params
+val = qp.get("run_id", None)
+
+# Normalize: Streamlit (new) -> str | None; older code may yield list
+if isinstance(val, list):
+    raw = val[0] if val else None
+else:
+    raw = val
+
+# Treat empty strings as missing
+if isinstance(raw, str) and not raw.strip():
+    raw = None
+
+# Prefer int IDs; if not an int, fall back to string ID
 try:
-    run_id = int(run_id_vals[0]) if run_id_vals else None
+    run_id = int(raw) if raw is not None else None
 except (TypeError, ValueError):
-    run_id = run_id_vals[0] if run_id_vals else None
+    run_id = raw  # allow non-numeric run ids
 
 if run_id is None:
     st.info("No run_id provided in the URL.")
