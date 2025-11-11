@@ -7,7 +7,7 @@ import runpy
 from functools import lru_cache
 from pathlib import Path
 from io import BytesIO
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterable
 
 import requests
 from PIL import Image, UnidentifiedImageError
@@ -35,7 +35,7 @@ def _fetch_pil_image_cached(url: str) -> Optional[Image.Image]:
 
 _icon_img = _fetch_pil_image_cached(ICON_URL) or "🛠️"
 
-# ---------- Page config (must be the first Streamlit command) ----------
+# ---------- Page config (must be first Streamlit command) ----------
 st.set_page_config(page_title="Agentic AV Ops", page_icon=_icon_img, layout="wide")
 
 # ---------- Repo paths ----------
@@ -49,22 +49,50 @@ def find_repo_root() -> Path:
 APP_ROOT = find_repo_root()
 CWD = Path.cwd()
 
-# Ensure the directory that contains "nav_pages" is importable
-if str(APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(APP_ROOT))
+# ---------- Utilities for robust path discovery ----------
+def _unique(seq: Iterable[Path]) -> list[Path]:
+    out, seen = [], set()
+    for p in seq:
+        p = p.resolve()
+        if p not in seen:
+            out.append(p); seen.add(p)
+    return out
 
-# ---------- Query params helpers (robust to new/old APIs) ----------
+def _candidate_roots() -> list[Path]:
+    # cover app dir, its parent (repo root), working dir, and their parents
+    roots = [
+        APP_ROOT,
+        APP_ROOT.parent,
+        CWD,
+        CWD.parent,
+        Path(__file__).resolve().parent,
+    ]
+    return _unique([p for p in roots if p.exists()])
+
+def _discover_dir(name: str) -> Optional[Path]:
+    # find a directory named `name` under any candidate root
+    for r in _candidate_roots():
+        d = r / name
+        if d.is_dir():
+            return d.resolve()
+    return None
+
+def _ensure_on_syspath(paths: Iterable[Path]):
+    for p in paths:
+        s = str(p)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+
+# add all candidate roots to import path so packages next to or above app are importable
+_ensure_on_syspath(_candidate_roots())
+
+# ---------- Query params helpers ----------
 def _get_query_params_dict() -> Dict[str, Any]:
-    """
-    Returns a simple dict of {str: str} for query params.
-    Works with both modern st.query_params and older experimental API.
-    """
     try:
-        qp = st.query_params  # modern: Mapping[str, str]
-        if hasattr(qp, "to_dict"):  # future-proof
+        qp = st.query_params  # Mapping[str, str] (modern)
+        if hasattr(qp, "to_dict"):
             qp = qp.to_dict()
         if isinstance(qp, dict):
-            # Normalize values to strings
             norm = {}
             for k, v in qp.items():
                 if isinstance(v, list):
@@ -74,7 +102,6 @@ def _get_query_params_dict() -> Dict[str, Any]:
             return norm
         return dict(qp)
     except Exception:
-        # Legacy fallback
         qp_legacy = st.experimental_get_query_params()
         return {k: (v[0] if isinstance(v, list) and v else "") for k, v in qp_legacy.items()}
 
@@ -83,20 +110,16 @@ def _get_qp(key: str, default: Optional[str] = None) -> Optional[str]:
 
 # ---------- Main Home page ----------
 def home():
-    # Header / Identity
     st.image(LOGO_URL, caption="", width=190)
     st.title("Agentic AV Ops - SOP Workflow Orchestration")
     st.write("Use the sidebar to navigate.")
 
-    # Model indicator (lightweight status in sidebar)
     def model_light():
         p = st.session_state.get("llm_provider") or "OpenAI"
         dot = "🟢" if p == "OpenAI" else "🔵"
         st.sidebar.markdown(f"**Model**: {dot} {p}")
-
     model_light()
 
-    # Try to import and run DB seed idempotently
     try:
         from core.db.seed import init_db as _imported_init_db
         _imported_init_db()
@@ -106,7 +129,6 @@ def home():
     except Exception as db_exception:
         st.error(f"❌ init_db failed to execute: {db_exception}")
 
-    # Page tips (safe default if import fails)
     try:
         from core.ui.page_tips import PAGE_TIPS  # type: ignore
     except Exception:
@@ -148,7 +170,6 @@ def home():
             ),
         }
 
-    # RUNBOOK lookup
     candidates = [
         APP_ROOT / "docs" / "RUNBOOK.md",
         APP_ROOT / "RUNBOOK.md",
@@ -167,7 +188,6 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
         runbook_md = runbook_path.read_text(encoding="utf-8")
         st.success(f"Loaded runbook: `{runbook_path}`")
 
-    # Global Page Tips
     with st.expander("Global Page Tips (quick reference)", expanded=False):
         cols = st.columns(2)
         for i, k in enumerate(PAGE_TIPS):
@@ -177,7 +197,6 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
 
     st.divider()
 
-    # TOC builder
     def build_toc(md: str):
         lines = md.splitlines()
         items = []
@@ -192,7 +211,6 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
         return items
 
     toc = build_toc(runbook_md)
-
     q = st.text_input("Search the runbook", value="", placeholder="type to filter headings & body...")
     filtered_md = runbook_md
     if q.strip():
@@ -208,27 +226,65 @@ Please add your full runbook at `docs/RUNBOOK.md` (preferred) or project root `R
                 st.markdown(f"{indent}• [{title}](#{anchor})", unsafe_allow_html=True)
 
     st.download_button("Download RUNBOOK.md", data=runbook_md, file_name="RUNBOOK.md", mime="text/markdown")
-
     st.divider()
     st.markdown(filtered_md, unsafe_allow_html=False)
 
-    # Optional debug
     debug_val = (_get_qp("debug") or "0").strip().lower()
     debug_on = debug_val in ("1", "true", "yes")
+    if debug_on:
+        with st.expander("Debug: Path discovery", expanded=True):
+            st.caption(f"APP_ROOT: `{APP_ROOT}`")
+            st.caption(f"CWD: `{CWD}`")
+            st.caption(f"Candidate roots: {', '.join(str(p) for p in _candidate_roots())}")
+            st.caption(f"nav_pages found at: `{_discover_dir('nav_pages')}`")
+            st.caption(f"pages found at: `{_discover_dir('pages')}`")
 
-    with st.expander("Debug: RUNBOOK.md lookup paths", expanded=debug_on):
-        st.caption(f"App root resolved to: `{APP_ROOT}`")
-        st.caption(f"Working dir: `{CWD}`")
-        st.code("\n".join(str(c) for c in candidates), language="text")
-
-# ---------- Navigation: import wrappers, with robust fallbacks ----------
+# ---------- Navigation helpers ----------
 def _wrap_script(path: Path):
-    """Return a render() that executes a standalone page script via runpy."""
     def _render():
         runpy.run_path(str(path), run_name="__main__")
     return _render
 
-# Try regular imports first (preferred when nav_pages is a package, lowercase modules)
+def _resolve_page_file(key: str) -> Path:
+    """
+    Return an existing file for the page key by searching in:
+      1) nav_pages/ (lowercase)
+      2) pages/ (several common casings)
+    Raises FileNotFoundError with a helpful message if nothing matches.
+    """
+    NAV = _discover_dir("nav_pages")
+    PAGES = _discover_dir("pages")
+
+    # candidate filenames per key (ordered by preference)
+    name_sets: Dict[str, list[str]] = {
+        "setupwizard":      ["setupwizard.py", "SetupWizard.py", "Setup_Wizard.py", "setup_wizard.py"],
+        "chat":             ["chat.py", "Chat.py"],
+        "agents":           ["agents.py", "Agents.py"],
+        "recipes":          ["recipes.py", "Recipes.py"],
+        "mcp_tools":        ["mcp_tools.py", "MCP_Tools.py", "mcp-tools.py"],
+        "settings":         ["settings.py", "Settings.py"],
+        "workflows":        ["workflows.py", "Workflows.py"],
+        "fixed_workflows":  ["fixed_workflows.py", "Fixed_Workflows.py", "fixed-workflows.py"],
+        "dashboard":        ["dashboard.py", "Dashboard.py"],
+        "help":             ["help.py", "Help.py"],
+        "run_detail":       ["run_detail.py", "Run_Detail.py", "run-detail.py"],
+    }
+    candidates: list[Path] = []
+
+    fnames = name_sets[key]
+    if NAV:
+        candidates += [NAV / f for f in fnames]
+    if PAGES:
+        candidates += [PAGES / f for f in fnames]
+
+    for p in candidates:
+        if p.exists():
+            return p
+
+    searched = "\n  ".join(str(p) for p in candidates)
+    raise FileNotFoundError(f"No file found for page '{key}'. Searched:\n  {searched}")
+
+# ---------- Try package imports first (prefer lowercase modules) ----------
 try:
     import nav_pages.setupwizard as _pg_setupwizard
     import nav_pages.chat as _pg_chat
@@ -242,70 +298,25 @@ try:
     import nav_pages.help as _pg_help
     import nav_pages.run_detail as _pg_run_detail
 except Exception as e:
-    st.warning(f"nav_pages import failed ({e}). Trying direct file execution from /nav_pages or /pages.")
-
-    NAV_ROOT = APP_ROOT / "nav_pages"
-    PAGES_ROOT = APP_ROOT / "pages"
-
-    # Prefer lowercase file names in nav_pages/, but support CamelCase in pages/
-    nav_lower = {
-        "setupwizard": "setupwizard.py",
-        "chat": "chat.py",
-        "agents": "agents.py",
-        "recipes": "recipes.py",
-        "mcp_tools": "mcp_tools.py",
-        "settings": "settings.py",
-        "workflows": "workflows.py",
-        "fixed_workflows": "fixed_workflows.py",
-        "dashboard": "dashboard.py",
-        "help": "help.py",
-        "run_detail": "run_detail.py",
-    }
-    pages_camel = {
-        "setupwizard": "Setup_Wizard.py",
-        "chat": "Chat.py",
-        "agents": "Agents.py",
-        "recipes": "Recipes.py",
-        "mcp_tools": "MCP_Tools.py",
-        "settings": "Settings.py",
-        "workflows": "Workflows.py",
-        "fixed_workflows": "Fixed_Workflows.py",
-        "dashboard": "Dashboard.py",
-        "help": "Help.py",
-        "run_detail": "Run_Detail.py",
-    }
-
-    def _fb_from(root: Path, fname: str):
-        return _wrap_script(root / fname)
-
-    def _pick_file(key: str) -> Path:
-        # Try nav_pages/lowercase first
-        p1 = NAV_ROOT / nav_lower[key]
-        if p1.exists():
-            return p1
-        # Then pages/CamelCase
-        p2 = PAGES_ROOT / pages_camel[key]
-        return p2
-
+    st.warning(f"nav_pages import failed ({e}). Falling back to direct file execution.")
+    # Build lightweight wrappers that run the discovered files
     class _FB:
         def __init__(self, key: str):
-            self.render = _wrap_script(_pick_file(key))
+            self.render = _wrap_script(_resolve_page_file(key))
+    _pg_setupwizard      = _FB("setupwizard")
+    _pg_chat             = _FB("chat")
+    _pg_agents           = _FB("agents")
+    _pg_recipes          = _FB("recipes")
+    _pg_mcp_tools        = _FB("mcp_tools")
+    _pg_settings         = _FB("settings")
+    _pg_workflows        = _FB("workflows")
+    _pg_fixed_workflows  = _FB("fixed_workflows")
+    _pg_dashboard        = _FB("dashboard")
+    _pg_help             = _FB("help")
+    _pg_run_detail       = _FB("run_detail")
 
-    _pg_setupwizard   = _FB("setupwizard")
-    _pg_chat          = _FB("chat")
-    _pg_agents        = _FB("agents")
-    _pg_recipes       = _FB("recipes")
-    _pg_mcp_tools     = _FB("mcp_tools")
-    _pg_settings      = _FB("settings")
-    _pg_workflows     = _FB("workflows")
-    _pg_fixed_workflows = _FB("fixed_workflows")
-    _pg_dashboard     = _FB("dashboard")
-    _pg_help          = _FB("help")
-    _pg_run_detail    = _FB("run_detail")
-
-# ---------- Build pages list ----------
+# ---------- Pages ----------
 def _pages_list():
-    # Use stable, lowercase url_paths
     return [
         st.Page(home,                       title="Home",            url_path="home"),
         st.Page(_pg_setupwizard.render,     title="Setup Wizard",    url_path="setupwizard"),
@@ -321,12 +332,11 @@ def _pages_list():
         st.Page(_pg_run_detail.render,      title="Run Detail",      url_path="run-detail"),
     ]
 
-# ---------- Run app with navigation (with legacy fallback) ----------
+# ---------- Run with navigation (legacy fallback supported) ----------
 try:
     if hasattr(st, "navigation") and hasattr(st, "Page"):
         st.navigation(_pages_list()).run()
     else:
-        # Legacy fallback: simple sidebar select
         st.sidebar.info("Using legacy navigation fallback (update Streamlit to enable st.navigation).")
         options = [
             "Home", "Setup Wizard", "Chat", "Agents", "Recipes", "MCP Tools",
@@ -348,7 +358,11 @@ try:
             "Run Detail": _pg_run_detail.render,
         }
         dispatch[choice]()
+except FileNotFoundError as e:
+    st.error(f"Navigation failed: {e}")
+    with st.expander("Troubleshooting — searched paths", expanded=True):
+        st.code(str(e), language="text")
+    home()
 except Exception as nav_ex:
     st.error(f"Navigation failed: {nav_ex}")
-    # As a last resort, show Home so the app still renders
     home()
