@@ -107,23 +107,23 @@ def home():
     except Exception:
         PAGE_TIPS = {
             "Setup Wizard": (
-                "Initialize DB and seed demo content: fixed system agents (Baseline, EventForm, Intake, Plan, Act, Verify, Learn), "
-                "sample Orchestrator + Fixed-Agent recipes, and mock MCP tools. Idempotent—safe to run multiple times."
+                "Initialize DB and seed demo content: fixed system Agents (Baseline, EventForm, Intake, Plan, Act, Verify, Learn), "
+                "sample Orchestrator + Fixed-Agent Recipes, and mock MCP tools. Idempotent—safe to run multiple times."
             ),
             "Settings": (
                 "Select active LLM provider (OpenAI ↔ Anthropic). Shows key source and MCP mock status. "
                 "No silent fallback—set a valid API key in secrets/env."
             ),
             "Chat": (
-                "Use slash commands. **/sop** compiles an Orchestrator recipe plus bound Fixed-Agent recipes from SOP, "
+                "Use slash commands. **/sop** compiles an Orchestrator recipe plus bound Fixed-Agent Recipes from SOP, "
                 "scaffolds required MCP tools, attaches to the chosen agent, and can execute the run. Toggle JSON mode to inspect payloads."
             ),
             "Agents": (
-                "Manage agents. Fixed system agents are non-editable and enforce guardrails. "
-                "Attach recipes and trigger runs with approvals where required."
+                "Manage Agents. Fixed system Agents are non-editable and enforce guardrails. "
+                "Attach Recipes and trigger runs with approvals where required."
             ),
             "Recipes": (
-                "Manage recipes. Includes Orchestrator recipes (workflow ‘what’) and Fixed-Agent recipes (phase ‘how’). Validate and version them."
+                "Manage Recipes. Includes Orchestrator Recipes (workflow ‘what’) and Fixed-Agent Recipes (phase ‘how’). Validate and version them."
             ),
             "MCP Tools": (
                 "Discover local connectors like Slack, Zoom, ServiceNow. Try `/health` or `/action`. "
@@ -226,17 +226,17 @@ def _wrap_script(path: Path):
 
 # Try regular imports first (preferred when nav_pages is a package)
 try:
-    import nav_pages.setupwizard as _pg_setupwizard
-    import nav_pages.chat as _pg_chat
-    import nav_pages.agents as _pg_agents
-    import nav_pages.recipes as _pg_recipes
-    import nav_pages.mcp_tools as _pg_mcp_tools
-    import nav_pages.settings as _pg_settings
-    import nav_pages.workflows as _pg_workflows
-    import nav_pages.fixed_workflows as _pg_fixed_workflows
-    import nav_pages.dashboard as _pg_dashboard
-    import nav_pages.help as _pg_help
-    import nav_pages.run_detail as _pg_run_detail
+    import nav_pages.SetupWizard as _pg_SetupWizard
+    import nav_pages.Chat as _pg_Chat
+    import nav_pages.Agents as _pg_Agents
+    import nav_pages.Recipes as _pg_Recipes
+    import nav_pages.MCP_Tools as _pg_MCP_Tools
+    import nav_pages.Settings as _pg_Settings
+    import nav_pages.Workflows as _pg_Workflows
+    import nav_pages.Fixed_Workflows as _pg_Fixed_Workflows
+    import nav_pages.Dashboard as _pg_Dashboard
+    import nav_pages.Help as _pg_Help
+    import nav_pages.Run_Detail as _pg_Run_Detail
 except Exception as e:
     st.warning(f"nav_pages import failed ({e}). Trying direct file execution from /nav_pages.")
 
@@ -245,17 +245,17 @@ except Exception as e:
 
     # file names (case-sensitive!)
     nav_map = {
-        "setupwizard": "SetupWizard.py",
-        "chat": "Chat.py",
-        "agents": "Agents.py",
-        "recipes": "Recipes.py",
-        "mcp_tools": "MCP_Tools.py",
-        "settings": "settings.py",
-        "workflows": "Workflows.py",
-        "fixed_workflows": "Fixed_Workflows.py",
-        "dashboard": "Dashboard.py",
-        "help": "Help.py",
-        "run_detail": "Run_Detail.py",
+        "SetupWizard": "SetupWizard.py",
+        "Chat": "Chat.py",
+        "Agents": "Agents.py",
+        "Recipes": "Recipes.py",
+        "MCP_Tools": "MCP_Tools.py",
+        "Settings": "Settings.py",
+        "Workflows": "Workflows.py",
+        "Fixed_Workflows": "Fixed_Workflows.py",
+        "Dashboard": "Dashboard.py",
+        "Help": "Help.py",
+        "Run_Detail": "Run_Detail.py",
     }
 
     def _fb_from(root: Path, key: str):
@@ -265,45 +265,45 @@ except Exception as e:
         return (root / nav_map[key]).exists()
 
     # Prefer nav_pages/ if present; else fall back to pages/
-    _pg_setupwizard = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "setupwizard") else PAGES_ROOT, "setupwizard")})()
-    _pg_chat = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "chat") else PAGES_ROOT, "chat")})()
-    _pg_agents = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "agents") else PAGES_ROOT, "agents")})()
-    _pg_recipes = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "recipes") else PAGES_ROOT, "recipes")})()
-    _pg_mcp_tools = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "mcp_tools") else PAGES_ROOT, "mcp_tools")})()
-    _pg_settings = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "settings") else PAGES_ROOT, "settings")})()
-    _pg_workflows = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "workflows") else PAGES_ROOT, "workflows")})()
-    _pg_fixed_workflows = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "fixed_workflows") else PAGES_ROOT, "fixed_workflows")})()
-    _pg_dashboard = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "dashboard") else PAGES_ROOT, "dashboard")})()
-    _pg_help = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "help") else PAGES_ROOT, "help")})()
-    _pg_run_detail = type("FB", (), {"render":
-        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "run_detail") else PAGES_ROOT, "run_detail")})()
+    _pg_SetupWizard = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "SetupWizard") else PAGES_ROOT, "SetupWizard")})()
+    _pg_Chat = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Chat") else PAGES_ROOT, "Chat")})()
+    _pg_Agents = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Agents") else PAGES_ROOT, "Agents")})()
+    _pg_Recipes = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Recipes") else PAGES_ROOT, "Recipes")})()
+    _pg_MCP_Tools = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "MCP_Tools") else PAGES_ROOT, "MCP_Tools")})()
+    _pg_Settings = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Settings") else PAGES_ROOT, "Settings")})()
+    _pg_Workflows = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Workflows") else PAGES_ROOT, "Workflows")})()
+    _pg_Fixed_Workflows = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Fixed_Workflows") else PAGES_ROOT, "Fixed_Workflows")})()
+    _pg_Dashboard = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Dashboard") else PAGES_ROOT, "Dashboard")})()
+    _pg_Help = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Help") else PAGES_ROOT, "Help")})()
+    _pg_Run_Detail = type("FB", (), {"render":
+        _fb_from(NAV_ROOT if _exists_in(NAV_ROOT, "Run_Detail") else PAGES_ROOT, "Run_Detail")})()
 
 # ---------- Build pages list ----------
 def _pages_list():
     # Prefer stable url_paths (avoid empty string for root in some Streamlit versions)
     return [
         st.Page(home,                       title="Home",            url_path="home"),
-        st.Page(_pg_setupwizard.render,     title="Setup Wizard",    url_path="setupwizard"),
-        st.Page(_pg_chat.render,            title="Chat",            url_path="chat"),
-        st.Page(_pg_agents.render,          title="Agents",          url_path="agents"),
-        st.Page(_pg_recipes.render,         title="Recipes",         url_path="recipes"),
-        st.Page(_pg_mcp_tools.render,       title="MCP Tools",       url_path="mcp-tools"),
-        st.Page(_pg_settings.render,        title="Settings",        url_path="settings"),
-        st.Page(_pg_workflows.render,       title="Workflows",       url_path="workflows"),
-        st.Page(_pg_fixed_workflows.render, title="Fixed-Workflows", url_path="fixed-workflows"),
-        st.Page(_pg_dashboard.render,       title="Dashboard",       url_path="dashboard"),
-        st.Page(_pg_help.render,            title="Help",            url_path="help"),
-        st.Page(_pg_run_detail.render,      title="Run Detail",      url_path="run-detail"),
+        st.Page(_pg_SetupWizard.render,     title="Setup Wizard",    url_path="SetupWizard"),
+        st.Page(_pg_Chat.render,            title="Chat",            url_path="Chat"),
+        st.Page(_pg_Agents.render,          title="Agents",          url_path="Agents"),
+        st.Page(_pg_Recipes.render,         title="Recipes",         url_path="Recipes"),
+        st.Page(_pg_MCP_Tools.render,       title="MCP Tools",       url_path="mcp-tools"),
+        st.Page(_pg_Settings.render,        title="Settings",        url_path="Settings"),
+        st.Page(_pg_Workflows.render,       title="Workflows",       url_path="Workflows"),
+        st.Page(_pg_Fixed_Workflows.render, title="Fixed-Workflows", url_path="fixed-Workflows"),
+        st.Page(_pg_Dashboard.render,       title="Dashboard",       url_path="Dashboard"),
+        st.Page(_pg_Help.render,            title="Help",            url_path="Help"),
+        st.Page(_pg_Run_Detail.render,      title="Run Detail",      url_path="run-detail"),
     ]
 
 # ---------- Run app with navigation (with legacy fallback) ----------
@@ -320,17 +320,17 @@ try:
         choice = st.sidebar.selectbox("Navigate", options, index=0)
         dispatch = {
             "Home": home,
-            "Setup Wizard": _pg_setupwizard.render,
-            "Chat": _pg_chat.render,
-            "Agents": _pg_agents.render,
-            "Recipes": _pg_recipes.render,
-            "MCP Tools": _pg_mcp_tools.render,
-            "Settings": _pg_settings.render,
-            "Workflows": _pg_workflows.render,
-            "Fixed-Workflows": _pg_fixed_workflows.render,
-            "Dashboard": _pg_dashboard.render,
-            "Help": _pg_help.render,
-            "Run Detail": _pg_run_detail.render,
+            "Setup Wizard": _pg_SetupWizard.render,
+            "Chat": _pg_Chat.render,
+            "Agents": _pg_Agents.render,
+            "Recipes": _pg_Recipes.render,
+            "MCP Tools": _pg_MCP_Tools.render,
+            "Settings": _pg_Settings.render,
+            "Workflows": _pg_Workflows.render,
+            "Fixed-Workflows": _pg_Fixed_Workflows.render,
+            "Dashboard": _pg_Dashboard.render,
+            "Help": _pg_Help.render,
+            "Run Detail": _pg_Run_Detail.render,
         }
         dispatch[choice]()
 except Exception as nav_ex:
